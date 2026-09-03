@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "bos_businesses": {
+      "title": "Business Workspaces",
+      "description": "Multi-tenant business workspaces and subscriptions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "currency": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_users": {
+      "title": "User Accounts",
+      "description": "User profiles and role-based permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_products": {
+      "title": "Products",
+      "description": "Inventory products catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "stock": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_sales": {
+      "title": "Sales Transactions",
+      "description": "Completed point of sale and invoice records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "total": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_customers": {
+      "title": "Customers",
+      "description": "Registered customer directory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_expenses": {
+      "title": "Expenses",
+      "description": "Operational expense logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "bos_travel_bookings": {
+      "title": "Travel Bookings",
+      "description": "Travel and tour bookings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "bookingNumber": { "type": "string" },
+        "customerName": { "type": "string" },
+        "destination": { "type": "string" },
+        "totalAmount": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "bos_businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/bos_businesses" },
+      "description": "Collection of business tenant records"
+    },
+    "bos_users/{userId}": {
+      "schema": { "$ref": "#/entities/bos_users" },
+      "description": "Collection of user account profiles"
+    },
+    "bos_products/{productId}": {
+      "schema": { "$ref": "#/entities/bos_products" },
+      "description": "Collection of product inventory records"
+    },
+    "bos_sales/{saleId}": {
+      "schema": { "$ref": "#/entities/bos_sales" },
+      "description": "Collection of sales transactions"
+    },
+    "bos_customers/{customerId}": {
+      "schema": { "$ref": "#/entities/bos_customers" },
+      "description": "Collection of customer profiles"
+    },
+    "bos_expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/bos_expenses" },
+      "description": "Collection of expense logs"
+    },
+    "bos_travel_bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/bos_travel_bookings" },
+      "description": "Collection of travel bookings"
+    }
+  }
+}
