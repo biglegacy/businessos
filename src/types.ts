@@ -17,7 +17,8 @@ export const REQUIRED_BUSINESS_TYPES = [
   'Professional Services',
   'General Enterprise',
   'Water & Drinks Distribution',
-  'Travel & Tour'
+  'Travel & Tour',
+  'School / Educational Institution'
 ];
 
 export interface Business {
@@ -29,6 +30,11 @@ export interface Business {
   category: string;
   businessType?: string;
   status: 'active' | 'suspended';
+  approvalStatus?: 'approved' | 'pending' | 'rejected';
+  rejectionReason?: string;
+  schoolType?: 'creche' | 'primary' | 'jhs' | 'shs' | 'tertiary' | 'vocational' | 'k12';
+  studentCount?: number;
+  staffCount?: number;
   createdAt: string;
   logoUrl?: string; // base64 representation of custom logo
   currency?: string; // e.g. 'GHC', 'USD', 'GBP', 'EUR'
@@ -56,7 +62,20 @@ export interface Business {
   enabledFeatures?: string[];
 }
 
-export type UserRole = 'owner' | 'manager' | 'cashier' | 'salesperson' | 'inventory_staff' | 'admin' | 'SUPER_ADMIN';
+export type UserRole = 
+  | 'owner' 
+  | 'manager' 
+  | 'cashier' 
+  | 'salesperson' 
+  | 'inventory_staff' 
+  | 'admin' 
+  | 'SUPER_ADMIN'
+  | 'principal'
+  | 'administrator'
+  | 'accountant'
+  | 'teacher'
+  | 'parent'
+  | 'student';
 
 export interface User {
   id: string;
@@ -947,6 +966,192 @@ export interface TravelMarketing {
   notes?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+// --- SCHOOL & EDUCATIONAL INSTITUTION INTERFACES ---
+
+export interface Student {
+  id: string;
+  businessId: string;
+  studentId: string; // Admission number (e.g. RCA-2026-001)
+  firstName: string;
+  lastName: string;
+  gender: 'male' | 'female' | 'other';
+  dateOfBirth?: string;
+  classId: string;
+  className: string;
+  parentName: string;
+  parentPhone: string;
+  parentEmail?: string;
+  address?: string;
+  admissionDate: string;
+  status: 'active' | 'graduated' | 'suspended' | 'withdrawn';
+  photoUrl?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface Teacher {
+  id: string;
+  businessId: string;
+  staffId: string;
+  name: string;
+  email: string;
+  phone: string;
+  gender: 'male' | 'female' | 'other';
+  qualification?: string;
+  subjects: string[];
+  classes: string[];
+  roleTitle?: string;
+  employmentDate: string;
+  status: 'active' | 'on_leave' | 'terminated';
+  salary?: number;
+  photoUrl?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SchoolClass {
+  id: string;
+  businessId: string;
+  name: string; // e.g. "Primary 4A", "Form 2 Science"
+  gradeLevel: string; // e.g. "Primary 4", "JHS 2", "SHS 2"
+  classTeacherId?: string;
+  classTeacherName?: string;
+  roomNumber?: string;
+  capacity: number;
+  currentEnrollment: number;
+  academicYear: string;
+  term?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface FeeInvoice {
+  id: string;
+  businessId: string;
+  invoiceNumber: string;
+  studentId: string;
+  studentName: string;
+  classId: string;
+  className: string;
+  term: string; // e.g. "Term 1", "Semester 1"
+  academicYear: string; // e.g. "2025/2026"
+  feeItems: { title: string; amount: number }[];
+  totalAmount: number;
+  paidAmount: number;
+  balance: number;
+  status: 'unpaid' | 'partial' | 'paid' | 'overdue';
+  dueDate: string;
+  issueDate: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface FeePayment {
+  id: string;
+  businessId: string;
+  invoiceId: string;
+  studentId: string;
+  studentName: string;
+  amount: number;
+  paymentMethod: 'cash' | 'card' | 'mobile_money' | 'bank_transfer' | 'cheque';
+  transactionRef?: string;
+  receiptNumber: string;
+  paidDate: string;
+  receivedBy: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface AttendanceRecord {
+  id: string;
+  businessId: string;
+  date: string;
+  classId: string;
+  className: string;
+  studentId: string;
+  studentName: string;
+  status: 'present' | 'absent' | 'late' | 'excused';
+  remarks?: string;
+  recordedBy: string;
+  createdAt: string;
+}
+
+export interface ExamGrade {
+  id: string;
+  businessId: string;
+  studentId: string;
+  studentName: string;
+  classId: string;
+  className?: string;
+  subject: string;
+  examName: string; // e.g. "Mid-Term Exam", "End of Term Examination"
+  term: string;
+  academicYear: string;
+  score: number;
+  maxScore: number;
+  grade: string; // e.g. "A+", "B", "1"
+  remarks?: string;
+  recordedBy?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SchoolTimetableEntry {
+  id: string;
+  businessId: string;
+  classId: string;
+  className: string;
+  dayOfWeek: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
+  startTime: string; // e.g. "08:00"
+  endTime: string; // e.g. "09:00"
+  subject: string;
+  teacherName: string;
+  room?: string;
+  createdAt: string;
+}
+
+export interface SchoolAnnouncement {
+  id: string;
+  businessId: string;
+  title: string;
+  content: string;
+  targetAudience: 'all' | 'teachers' | 'parents' | 'students';
+  channel: 'portal' | 'sms' | 'whatsapp' | 'both';
+  date: string;
+  authorName: string;
+  smsStatus?: 'sent' | 'failed' | 'simulated';
+  whatsAppStatus?: 'sent' | 'failed' | 'simulated';
+  recipientCount?: number;
+  createdAt: string;
+}
+
+export interface SmsSettings {
+  id?: string;
+  businessId?: string; // 'platform' or specific business
+  provider: 'hubtel' | 'arkesel' | 'mnotify' | 'twilio';
+  apiKey: string;
+  apiSecret?: string;
+  senderId: string;
+  balance?: number;
+  isActive: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface WhatsAppSettings {
+  id?: string;
+  businessId?: string;
+  provider: 'meta' | 'twilio' | 'infobip';
+  phoneNumberId?: string;
+  businessAccountId?: string;
+  accessToken: string;
+  senderPhoneNumber?: string;
+  isActive: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 

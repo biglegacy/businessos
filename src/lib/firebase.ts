@@ -7,22 +7,25 @@ import config from '../../firebase-applet-config.json';
 // Suppress internal non-fatal connection status warnings from Firebase SDK
 setLogLevel('silent');
 
+const metaEnv = (import.meta as any)?.env || {};
+
 const firebaseConfig = {
-  apiKey: config.apiKey,
-  authDomain: config.authDomain,
-  projectId: config.projectId,
-  storageBucket: config.storageBucket,
-  messagingSenderId: config.messagingSenderId,
-  appId: config.appId
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || config.apiKey,
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || config.authDomain,
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || config.projectId,
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || config.storageBucket,
+  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || config.messagingSenderId,
+  appId: metaEnv.VITE_FIREBASE_APP_ID || config.appId
 };
 
 // Initialize Firebase App
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 // Initialize Firestore with auto-detect long polling for optimal connection handling in proxied environments
+const databaseId = metaEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID || config.firestoreDatabaseId || '(default)';
 export const firestore = initializeFirestore(app, {
   experimentalAutoDetectLongPolling: true,
-}, config.firestoreDatabaseId || '(default)');
+}, databaseId);
 
 // Test connection to Firestore as per skill guidelines
 async function testConnection() {

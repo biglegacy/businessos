@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Business, User, Product, Service, Customer, Sale, Expense, ActivityLog, Branch, StockTransfer, CustomerReturn, SupplierReturn, GlobalFeature, AdminFeatureChangeLog, ProfessionalServiceJob, MenuItem, Ingredient, Recipe, RestaurantTable, RestaurantOrder, Reservation, Supplier, Notification, PrinterSettings, PaystackSettings, PaymentTransaction, GlobalSystemConfig, NotificationPreferences, PushDeviceToken, NotificationLog, SalonAppointment, SalonStaff, LaundryOrder, LaundryService, ScannerSession, ScannedItemPayload, PrintCommand, REQUIRED_BUSINESS_TYPES, TravelCustomer, TravelBooking, TravelFlight, TravelHotel, TravelVisa, TravelPassport, TravelPackage, TravelTransport, TravelInsurance, TravelSupplier, TravelPartner, TravelDocument, TravelMarketing } from '../types';
+import { Business, User, Product, Service, Customer, Sale, Expense, ActivityLog, Branch, StockTransfer, CustomerReturn, SupplierReturn, GlobalFeature, AdminFeatureChangeLog, ProfessionalServiceJob, MenuItem, Ingredient, Recipe, RestaurantTable, RestaurantOrder, Reservation, Supplier, Notification, PrinterSettings, PaystackSettings, PaymentTransaction, GlobalSystemConfig, NotificationPreferences, PushDeviceToken, NotificationLog, SalonAppointment, SalonStaff, LaundryOrder, LaundryService, ScannerSession, ScannedItemPayload, PrintCommand, REQUIRED_BUSINESS_TYPES, TravelCustomer, TravelBooking, TravelFlight, TravelHotel, TravelVisa, TravelPassport, TravelPackage, TravelTransport, TravelInsurance, TravelSupplier, TravelPartner, TravelDocument, TravelMarketing, Student, Teacher, SchoolClass, FeeInvoice, FeePayment, AttendanceRecord, ExamGrade, SchoolTimetableEntry, SchoolAnnouncement, SmsSettings, WhatsAppSettings } from '../types';
 import { firestore, doc, setDoc, deleteDoc, collection, onSnapshot, storage, ref, uploadString, getDownloadURL, handleFirestoreError, OperationType } from './firebase';
 
 export const ALL_DB_KEYS = [
@@ -24,7 +24,11 @@ export const ALL_DB_KEYS = [
   'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports',
   'bos_travel_packages', 'bos_travel_transports', 'bos_travel_insurances',
   'bos_travel_suppliers', 'bos_travel_partners', 'bos_travel_documents',
-  'bos_travel_marketings'
+  'bos_travel_marketings',
+  'bos_students', 'bos_teachers', 'bos_classes',
+  'bos_fee_invoices', 'bos_fee_payments', 'bos_attendance',
+  'bos_exam_grades', 'bos_timetable', 'bos_school_announcements',
+  'bos_sms_settings', 'bos_whatsapp_settings'
 ];
 
 // Smart record merging helper across devices and updates
@@ -2219,8 +2223,260 @@ class CloudDatabase {
       { key: 'bos_sales', label: 'Completed Sales Transactions', count: this.getSalesRaw().length },
       { key: 'bos_customers', label: 'Registered Customers', count: this.getCustomersRaw().length },
       { key: 'bos_expenses', label: 'Expenses Recorded', count: this.getExpensesRaw().length },
-      { key: 'bos_notifications', label: 'System Notifications', count: this.getNotificationsRaw().length }
+      { key: 'bos_notifications', label: 'System Notifications', count: this.getNotificationsRaw().length },
+      { key: 'bos_students', label: 'Enrolled Students', count: this.read<Student>('bos_students').length },
+      { key: 'bos_teachers', label: 'Teachers & Academic Staff', count: this.read<Teacher>('bos_teachers').length },
+      { key: 'bos_classes', label: 'Classes & Grade Sections', count: this.read<SchoolClass>('bos_classes').length },
+      { key: 'bos_fee_invoices', label: 'School Fee Invoices', count: this.read<FeeInvoice>('bos_fee_invoices').length }
     ];
+  }
+
+  // --- SCHOOL & EDUCATIONAL INSTITUTION OPERATIONS ---
+  public getStudents(businessId: string): Student[] {
+    return this.read<Student>('bos_students').filter(s => s.businessId === businessId);
+  }
+
+  public saveStudent(businessId: string, student: Student): void {
+    const list = this.read<Student>('bos_students');
+    const idx = list.findIndex(s => s.id === student.id && s.businessId === businessId);
+    const target = { ...student, businessId, updatedAt: new Date().toISOString() };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_students', list);
+  }
+
+  public deleteStudent(businessId: string, id: string): void {
+    const list = this.read<Student>('bos_students').filter(s => !(s.id === id && s.businessId === businessId));
+    this.write('bos_students', list);
+  }
+
+  public getTeachers(businessId: string): Teacher[] {
+    return this.read<Teacher>('bos_teachers').filter(t => t.businessId === businessId);
+  }
+
+  public saveTeacher(businessId: string, teacher: Teacher): void {
+    const list = this.read<Teacher>('bos_teachers');
+    const idx = list.findIndex(t => t.id === teacher.id && t.businessId === businessId);
+    const target = { ...teacher, businessId, updatedAt: new Date().toISOString() };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_teachers', list);
+  }
+
+  public deleteTeacher(businessId: string, id: string): void {
+    const list = this.read<Teacher>('bos_teachers').filter(t => !(t.id === id && t.businessId === businessId));
+    this.write('bos_teachers', list);
+  }
+
+  public getClasses(businessId: string): SchoolClass[] {
+    return this.read<SchoolClass>('bos_classes').filter(c => c.businessId === businessId);
+  }
+
+  public saveClass(businessId: string, cls: SchoolClass): void {
+    const list = this.read<SchoolClass>('bos_classes');
+    const idx = list.findIndex(c => c.id === cls.id && c.businessId === businessId);
+    const target = { ...cls, businessId, updatedAt: new Date().toISOString() };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_classes', list);
+  }
+
+  public deleteClass(businessId: string, id: string): void {
+    const list = this.read<SchoolClass>('bos_classes').filter(c => !(c.id === id && c.businessId === businessId));
+    this.write('bos_classes', list);
+  }
+
+  public getFeeInvoices(businessId: string): FeeInvoice[] {
+    return this.read<FeeInvoice>('bos_fee_invoices').filter(i => i.businessId === businessId);
+  }
+
+  public saveFeeInvoice(businessId: string, invoice: FeeInvoice): void {
+    const list = this.read<FeeInvoice>('bos_fee_invoices');
+    const idx = list.findIndex(i => i.id === invoice.id && i.businessId === businessId);
+    const target = { ...invoice, businessId, updatedAt: new Date().toISOString() };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_fee_invoices', list);
+  }
+
+  public deleteFeeInvoice(businessId: string, id: string): void {
+    const list = this.read<FeeInvoice>('bos_fee_invoices').filter(i => !(i.id === id && i.businessId === businessId));
+    this.write('bos_fee_invoices', list);
+  }
+
+  public getFeePayments(businessId: string): FeePayment[] {
+    return this.read<FeePayment>('bos_fee_payments').filter(p => p.businessId === businessId);
+  }
+
+  public saveFeePayment(businessId: string, payment: FeePayment): void {
+    const list = this.read<FeePayment>('bos_fee_payments');
+    const target = { ...payment, businessId };
+    list.push(target);
+    this.write('bos_fee_payments', list);
+
+    // Automatically update balance on the associated invoice
+    if (payment.invoiceId) {
+      const invoices = this.getFeeInvoices(businessId);
+      const inv = invoices.find(i => i.id === payment.invoiceId);
+      if (inv) {
+        const newPaid = (inv.paidAmount || 0) + payment.amount;
+        const newBalance = Math.max(0, inv.totalAmount - newPaid);
+        const newStatus = newBalance <= 0 ? 'paid' : 'partial';
+        this.saveFeeInvoice(businessId, {
+          ...inv,
+          paidAmount: newPaid,
+          balance: newBalance,
+          status: newStatus
+        });
+      }
+    }
+  }
+
+  public getAttendance(businessId: string, date?: string, classId?: string): AttendanceRecord[] {
+    let list = this.read<AttendanceRecord>('bos_attendance').filter(a => a.businessId === businessId);
+    if (date) list = list.filter(a => a.date === date);
+    if (classId) list = list.filter(a => a.classId === classId);
+    return list;
+  }
+
+  public saveAttendanceRecord(businessId: string, record: AttendanceRecord): void {
+    const list = this.read<AttendanceRecord>('bos_attendance');
+    const idx = list.findIndex(a => a.businessId === businessId && a.studentId === record.studentId && a.date === record.date);
+    const target = { ...record, businessId };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_attendance', list);
+  }
+
+  public saveAttendanceBatch(businessId: string, records: AttendanceRecord[]): void {
+    records.forEach(r => this.saveAttendanceRecord(businessId, r));
+  }
+
+  public getExamGrades(businessId: string, classId?: string, term?: string): ExamGrade[] {
+    let list = this.read<ExamGrade>('bos_exam_grades').filter(g => g.businessId === businessId);
+    if (classId) list = list.filter(g => g.classId === classId);
+    if (term) list = list.filter(g => g.term === term);
+    return list;
+  }
+
+  public saveExamGrade(businessId: string, grade: ExamGrade): void {
+    const list = this.read<ExamGrade>('bos_exam_grades');
+    const idx = list.findIndex(g => g.id === grade.id && g.businessId === businessId);
+    const target = { ...grade, businessId, updatedAt: new Date().toISOString() };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_exam_grades', list);
+  }
+
+  public deleteExamGrade(businessId: string, id: string): void {
+    const list = this.read<ExamGrade>('bos_exam_grades').filter(g => !(g.id === id && g.businessId === businessId));
+    this.write('bos_exam_grades', list);
+  }
+
+  public getTimetable(businessId: string, classId?: string): SchoolTimetableEntry[] {
+    let list = this.read<SchoolTimetableEntry>('bos_timetable').filter(t => t.businessId === businessId);
+    if (classId) list = list.filter(t => t.classId === classId);
+    return list;
+  }
+
+  public saveTimetableEntry(businessId: string, entry: SchoolTimetableEntry): void {
+    const list = this.read<SchoolTimetableEntry>('bos_timetable');
+    const idx = list.findIndex(t => t.id === entry.id && t.businessId === businessId);
+    const target = { ...entry, businessId };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_timetable', list);
+  }
+
+  public deleteTimetableEntry(businessId: string, id: string): void {
+    const list = this.read<SchoolTimetableEntry>('bos_timetable').filter(t => !(t.id === id && t.businessId === businessId));
+    this.write('bos_timetable', list);
+  }
+
+  public getSchoolAnnouncements(businessId: string): SchoolAnnouncement[] {
+    return this.read<SchoolAnnouncement>('bos_school_announcements').filter(a => a.businessId === businessId);
+  }
+
+  public saveSchoolAnnouncement(businessId: string, announcement: SchoolAnnouncement): void {
+    const list = this.read<SchoolAnnouncement>('bos_school_announcements');
+    const target = { ...announcement, businessId };
+    list.unshift(target);
+    this.write('bos_school_announcements', list);
+  }
+
+  // --- SMS & WHATSAPP SETTINGS ---
+  public getSmsSettings(): SmsSettings {
+    const raw = this.read<SmsSettings>('bos_sms_settings');
+    if (raw && raw.length > 0) return raw[0];
+    return {
+      provider: 'hubtel',
+      apiKey: '',
+      senderId: 'SchoolOS',
+      balance: 1500,
+      isActive: true
+    };
+  }
+
+  public saveSmsSettings(settings: SmsSettings): void {
+    this.write('bos_sms_settings', [{ ...settings, updatedAt: new Date().toISOString() }]);
+  }
+
+  public getWhatsAppSettings(): WhatsAppSettings {
+    const raw = this.read<WhatsAppSettings>('bos_whatsapp_settings');
+    if (raw && raw.length > 0) return raw[0];
+    return {
+      provider: 'meta',
+      accessToken: '',
+      senderPhoneNumber: '',
+      isActive: true
+    };
+  }
+
+  public saveWhatsAppSettings(settings: WhatsAppSettings): void {
+    this.write('bos_whatsapp_settings', [{ ...settings, updatedAt: new Date().toISOString() }]);
+  }
+
+  // --- APPROVAL WORKFLOW FOR SCHOOLS & TENANTS ---
+  public approveBusiness(id: string): void {
+    const businesses = this.getBusinesses();
+    const bus = businesses.find(b => b.id === id);
+    if (bus) {
+      bus.approvalStatus = 'approved';
+      bus.status = 'active';
+      this.saveBusiness(bus);
+    }
+  }
+
+  public rejectBusiness(id: string, reason?: string): void {
+    const businesses = this.getBusinesses();
+    const bus = businesses.find(b => b.id === id);
+    if (bus) {
+      bus.approvalStatus = 'rejected';
+      bus.rejectionReason = reason || 'Does not meet institution registration criteria';
+      bus.status = 'suspended';
+      this.saveBusiness(bus);
+    }
   }
 }
 
