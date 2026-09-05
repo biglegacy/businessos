@@ -1,6 +1,58 @@
 {
   "bos_logs": [
     {
+      "id": "audit-del-1788608505750-2mo5",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "non-existent-biz-123",
+      "businessName": "non-existent-biz-123",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:41:45.750Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"non-existent-biz-123\" (ID: non-existent-biz-123), purged 0 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608265042-i1op",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-fast-perf-456",
+      "businessName": "Fast Performance Test School",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:37:45.042Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Fast Performance Test School\" (ID: test-fast-perf-456), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608247797-do2n",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-speed-delete-123",
+      "businessName": "Speed Delete Test Business",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:37:27.797Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Speed Delete Test Business\" (ID: test-speed-delete-123), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608201388-hiib",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-del-verify-999",
+      "businessName": "Test Business To Be Deleted",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:36:41.388Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Test Business To Be Deleted\" (ID: test-del-verify-999), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
       "userId": "system",
       "userName": "Sync Engine",
       "action": "Database Synced",
@@ -2919,6 +2971,58 @@
   ],
   "bos_feature_audit_logs": [
     {
+      "id": "audit-del-1788608505750-2mo5",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "non-existent-biz-123",
+      "businessName": "non-existent-biz-123",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:41:45.750Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"non-existent-biz-123\" (ID: non-existent-biz-123), purged 0 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608265042-i1op",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-fast-perf-456",
+      "businessName": "Fast Performance Test School",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:37:45.042Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Fast Performance Test School\" (ID: test-fast-perf-456), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608247797-do2n",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-speed-delete-123",
+      "businessName": "Speed Delete Test Business",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:37:27.797Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Speed Delete Test Business\" (ID: test-speed-delete-123), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788608201388-hiib",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "test-del-verify-999",
+      "businessName": "Test Business To Be Deleted",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-05T11:36:41.388Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Test Business To Be Deleted\" (ID: test-del-verify-999), purged 2 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
       "id": "audit-pay-1785313543698-on9k",
       "action": "PAYMENT_VERIFIED_SUCCESS",
       "businessId": "bus-3n41l7d",
@@ -4152,5 +4256,10 @@
       "expiresAt": "2026-07-29T09:23:38.521Z",
       "updatedAt": "2026-07-29T09:18:38.521Z"
     }
-  ]
+  ],
+  "bos_products": [],
+  "bos_deleted_business_ids": [
+    "non-existent-biz-123"
+  ],
+  "bos_students": []
 }

@@ -45,6 +45,30 @@ const ROLE_PERMISSIONS: Record<UserRole, { title: string; caps: string[] }> = {
   SUPER_ADMIN: {
     title: 'Platform Super Admin',
     caps: ['Full Global System Control']
+  },
+  principal: {
+    title: 'School Principal',
+    caps: ['Full School Oversight', 'Student Admissions', 'Staff & Faculty Management', 'Fee & Invoice Tracking', 'Academics & Reports']
+  },
+  administrator: {
+    title: 'School Administrator',
+    caps: ['Admissions & Records', 'Class Schedules', 'Fee Collection', 'Attendance Audits', 'SMS Broadcasts']
+  },
+  accountant: {
+    title: 'School Bursar / Accountant',
+    caps: ['Fee Invoicing', 'Payment Processing', 'Salaries & Payroll', 'Expense Auditing', 'Financial Statements']
+  },
+  teacher: {
+    title: 'Teacher / Faculty',
+    caps: ['Class Attendance', 'Grading & Report Cards', 'Timetable Viewer', 'Class Announcements']
+  },
+  parent: {
+    title: 'Parent / Guardian',
+    caps: ['Student Profile', 'Fee Statements & Pay', 'Attendance History', 'Academic Reports Cards', 'School Notices']
+  },
+  student: {
+    title: 'Enrolled Student',
+    caps: ['Class Schedule', 'My Attendance', 'Grades & Results', 'School Notices']
   }
 };
 

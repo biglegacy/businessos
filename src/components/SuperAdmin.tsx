@@ -10,7 +10,7 @@ import {
   Building, Users, Shield, CheckCircle2, AlertTriangle, Trash2, 
   Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye,
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
-  Settings, Check, Zap, Server, FileText, Bell
+  Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -28,6 +28,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   >('businesses');
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [bizCategoryFilter, setBizCategoryFilter] = useState<'all' | 'school' | 'other'>('all');
   
   // Reload trigger
   const [trigger, setTrigger] = useState(0);
@@ -342,59 +344,55 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     forceUpdate();
   };
 
-  const handleDeleteBusiness = async (id: string) => {
-    const bus = businesses.find(b => b.id === id);
-    const busName = bus ? bus.name : id;
+  const handleDeleteBusiness = (targetOrId: Business | string) => {
+    const bus = typeof targetOrId === 'string' ? businesses.find(b => b.id === targetOrId) : targetOrId;
+    if (!bus) return;
+    setDeleteErrorMessage(null);
+    setDeletingBusinessTarget(bus);
+  };
 
-    const confirmDelete = window.confirm(
-      "Are you sure you want to permanently delete this business?\n\nThis will remove all related business data and cannot be undone."
-    );
-    if (!confirmDelete) return;
+  const executeDeleteBusiness = async () => {
+    if (!deletingBusinessTarget || isDeletingInProgress) return;
+    const target = deletingBusinessTarget;
+    const busId = target.id;
+    const busName = target.name || busId;
 
     setIsDeletingInProgress(true);
     setDeleteErrorMessage(null);
 
     try {
-      const response = await fetch(`/api/admin/business/${id}`, {
-        method: "DELETE",
-        headers: {
-          'Content-Type': 'application/json',
-          'x-super-admin': 'true'
-        }
-      });
+      // 1. Purge via db.deleteBusinessPermanent (handles local purge, tombstone, firestore deletion, and audit logging)
+      const currentUser = db.getCurrentUser() || { id: 'superadmin', email: 'admin@businessos.com', name: 'Super Admin' };
+      await db.deleteBusinessPermanent(busId, currentUser);
 
-      const result = await response.json();
-
-      if (result.success) {
-        db.purgeLocalBusinessData(id);
-        alert("Business deleted permanently");
-        setDeleteSuccessMessage(`Business "${busName}" deleted permanently.`);
-        setTimeout(() => setDeleteSuccessMessage(null), 5000);
-        forceUpdate();
-      } else {
-        throw new Error(result.error || result.message || "Failed to delete business");
-      }
-    } catch (err: any) {
+      // 2. Also call backend endpoint to guarantee cloud_db.json and Firebase Admin accounts are purged
       try {
-        const currentUser = db.getCurrentUser() || { id: 'superadmin', email: 'admin@businessos.com', name: 'Super Admin' };
-        await db.deleteBusinessPermanent(id, currentUser);
-        alert("Business deleted permanently");
-        setDeleteSuccessMessage(`Business "${busName}" deleted permanently.`);
-        setTimeout(() => setDeleteSuccessMessage(null), 5000);
-        forceUpdate();
-      } catch (fallbackErr: any) {
-        alert(`Error deleting business: ${fallbackErr.message || String(fallbackErr)}`);
-        setDeleteErrorMessage(fallbackErr.message || String(fallbackErr));
+        await fetch(`/api/admin/business/${busId}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-super-admin': 'true'
+          }
+        });
+      } catch (backendErr) {
+        console.warn('Backend sync delete note:', backendErr);
       }
+
+      // 3. Purge local cache and notify listeners
+      db.purgeLocalBusinessData(busId);
+
+      // 4. Update UI state immediately
+      setDeletingBusinessTarget(null);
+      setDeleteSuccessMessage(`Business / School "${busName}" has been permanently deleted from the database.`);
+      setTimeout(() => setDeleteSuccessMessage(null), 6000);
+      forceUpdate();
+    } catch (err: any) {
+      console.error('Delete business error:', err);
+      const msg = err?.message || String(err);
+      setDeleteErrorMessage(`Failed to delete business: ${msg}`);
     } finally {
       setIsDeletingInProgress(false);
-      setDeletingBusinessTarget(null);
     }
-  };
-
-  const executeDeleteBusiness = async () => {
-    if (!deletingBusinessTarget) return;
-    await handleDeleteBusiness(deletingBusinessTarget.id);
   };
 
   const handleResetOwnerPassword = async (e: React.FormEvent) => {
@@ -571,12 +569,18 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   };
 
   // Filters
-  const filteredBusinesses = businesses.filter(b => 
-    b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredBusinesses = businesses.filter(b => {
+    const matchesSearch = b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      b.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      b.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      b.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      b.id.toLowerCase().includes(searchTerm.toLowerCase());
+
+    const isSchool = (b.category === 'School / Educational Institution' || b.businessType === 'School / Educational Institution' || b.category?.toLowerCase().includes('school'));
+    if (bizCategoryFilter === 'school') return matchesSearch && isSchool;
+    if (bizCategoryFilter === 'other') return matchesSearch && !isSchool;
+    return matchesSearch;
+  });
 
   const filteredUsers = users.filter(u => {
     const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -587,11 +591,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     return matchesSearch && matchesRole && matchesBus;
   });
 
-  return (
-    <div id="superadmin-root" className="min-h-screen bg-slate-50 flex font-sans">
-      {/* Sidebar navigation panel */}
-      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0">
-        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+  const superAdminNavContent = (
+    <>
+      <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+        <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-emerald-900/30">
             S
           </div>
@@ -600,110 +603,161 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
             <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-bold">BOS Global Control</span>
           </div>
         </div>
+        <button
+          onClick={() => setIsMobileNavOpen(false)}
+          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          <button
-            onClick={() => { setActiveTab('businesses'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'businesses' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Building className="h-4 w-4" /> Businesses
-          </button>
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        <button
+          onClick={() => { setActiveTab('businesses'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'businesses' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Building className="h-4 w-4" /> Businesses &amp; Schools
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('paynow'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'paynow' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <CreditCard className="h-4 w-4 text-emerald-400" /> Paystack API Settings
-          </button>
+        <button
+          onClick={() => { setActiveTab('paynow'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'paynow' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <CreditCard className="h-4 w-4 text-emerald-400" /> Paystack API Settings
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('users'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'users' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Users className="h-4 w-4" /> Global User Directory
-          </button>
+        <button
+          onClick={() => { setActiveTab('users'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'users' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Users className="h-4 w-4" /> Global User Directory
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('notifications'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'notifications' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Bell className="h-4 w-4 text-amber-400" /> Push Notifications
-          </button>
+        <button
+          onClick={() => { setActiveTab('notifications'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'notifications' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Bell className="h-4 w-4 text-amber-400" /> Push Notifications
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('registration'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'registration' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Globe className="h-4 w-4" /> Registration Control
-          </button>
+        <button
+          onClick={() => { setActiveTab('registration'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'registration' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Globe className="h-4 w-4" /> Registration Control
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('system'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'system' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Settings className="h-4 w-4" /> System Configuration
-          </button>
+        <button
+          onClick={() => { setActiveTab('system'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'system' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Settings className="h-4 w-4" /> System Configuration
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('cloud'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'cloud' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Database className="h-4 w-4" /> Cloud &amp; Storage
-          </button>
+        <button
+          onClick={() => { setActiveTab('cloud'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'cloud' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Database className="h-4 w-4" /> Cloud &amp; Storage
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('monitoring'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'monitoring' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Activity className="h-4 w-4" /> Platform Monitoring
-          </button>
+        <button
+          onClick={() => { setActiveTab('monitoring'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'monitoring' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Activity className="h-4 w-4" /> Platform Monitoring
+        </button>
 
-          <button
-            onClick={() => { setActiveTab('features'); setSearchTerm(''); }}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer ${
-              activeTab === 'features' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
-            }`}
-          >
-            <Sliders className="h-4 w-4" /> Feature Gates
-          </button>
-        </nav>
+        <button
+          onClick={() => { setActiveTab('features'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'features' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Sliders className="h-4 w-4" /> Feature Gates
+        </button>
+      </nav>
 
-        <div className="p-4 border-t border-slate-800">
-          <div className="p-3 bg-slate-800/60 rounded-xl flex items-center justify-between">
-            <div className="truncate">
-              <p className="text-xs font-bold text-white truncate">Administrator</p>
-              <p className="text-[10px] text-slate-400 truncate font-mono">admin@business.os</p>
-            </div>
-            <button 
-              onClick={onLogout}
-              className="p-1.5 hover:bg-red-600/20 hover:text-red-400 rounded-lg transition cursor-pointer"
-              title="Secure Logout"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
+      <div className="p-4 border-t border-slate-800">
+        <div className="p-3 bg-slate-800/60 rounded-xl flex items-center justify-between">
+          <div className="truncate">
+            <p className="text-xs font-bold text-white truncate">Administrator</p>
+            <p className="text-[10px] text-slate-400 truncate font-mono">admin@business.os</p>
           </div>
+          <button 
+            onClick={onLogout}
+            className="p-1.5 hover:bg-red-600/20 hover:text-red-400 rounded-lg transition cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+            title="Secure Logout"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div id="superadmin-root" className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans">
+      {/* Mobile Drawer Overlay */}
+      {isMobileNavOpen && (
+        <div 
+          onClick={() => setIsMobileNavOpen(false)}
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 lg:hidden"
+        />
+      )}
+
+      {/* Mobile Slide-Out Sidebar */}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-72 bg-slate-900 text-slate-300 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out lg:hidden ${
+        isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
+        {superAdminNavContent}
+      </aside>
+
+      {/* Desktop Persistent Sidebar */}
+      <aside className="hidden lg:flex w-64 bg-slate-900 text-slate-300 flex-col shrink-0 min-h-screen">
+        {superAdminNavContent}
       </aside>
 
       {/* Main Panel */}
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0">
+        {/* Mobile Header Bar */}
+        <header className="lg:hidden bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-md shrink-0 sticky top-0 z-30">
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-sm shadow">
+              S
+            </div>
+            <div>
+              <h2 className="text-xs font-black tracking-tight leading-none">SuperAdmin</h2>
+              <span className="text-[9px] text-emerald-400 font-bold uppercase">Control Panel</span>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsMobileNavOpen(true)}
+            className="p-2 rounded-xl bg-slate-800 text-slate-200 hover:text-white cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+            aria-label="Open Navigation Menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        </header>
+
+        {/* Desktop Header */}
+        <header className="hidden lg:flex h-16 bg-white border-b border-slate-200 px-8 items-center justify-between shrink-0">
           <h2 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
             {activeTab === 'businesses' && <><Building className="h-4 w-4 text-emerald-600" /> Business Tenants Management</>}
             {activeTab === 'paynow' && <><CreditCard className="h-4 w-4 text-emerald-600" /> Pay Now API Gateway Settings</>}
@@ -754,7 +808,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         </header>
 
         {/* Contents Wrapper */}
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           {/* Deletion Success Toast Banner */}
           {deleteSuccessMessage && (
             <div className="mb-6 p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between text-emerald-900 font-bold shadow-sm animate-fade-in">
@@ -764,7 +818,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               </div>
               <button 
                 onClick={() => setDeleteSuccessMessage(null)}
-                className="p-1 hover:bg-emerald-100 rounded-lg text-emerald-700 transition cursor-pointer"
+                className="p-1 hover:bg-emerald-100 rounded-lg text-emerald-700 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -772,45 +826,45 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
           )}
 
           {/* Quick Stats Grid */}
-          <section className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5 mb-6">
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registered Businesses</p>
                 <h3 className="text-xl font-black text-slate-800 mt-1">{totalBusinesses}</h3>
               </div>
-              <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
                 <Building className="h-5 w-5" />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active Workspaces</p>
                 <h3 className="text-xl font-black text-emerald-700 mt-1">{activeBusinesses}</h3>
               </div>
-              <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
                 <CheckCircle2 className="h-5 w-5" />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Active Users</p>
                 <h3 className="text-xl font-black text-slate-800 mt-1">{totalUsers}</h3>
               </div>
-              <div className="h-10 w-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
                 <Users className="h-5 w-5" />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Paystack Gateway</p>
                 <h3 className="text-xs font-extrabold text-emerald-800 uppercase mt-1 flex items-center gap-1">
                   <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> {payNowState.environment}
                 </h3>
               </div>
-              <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-800 flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-800 flex items-center justify-center shrink-0">
                 <CreditCard className="h-5 w-5" />
               </div>
             </div>
@@ -818,107 +872,264 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
           {/* TAB 1: Businesses */}
           {activeTab === 'businesses' && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
-                    <th className="py-3.5 px-6">Business Name</th>
-                    <th className="py-3.5 px-6">Owner</th>
-                    <th className="py-3.5 px-6">Email</th>
-                    <th className="py-3.5 px-6">Business Type</th>
-                    <th className="py-3.5 px-6">Status</th>
-                    <th className="py-3.5 px-6">Created Date</th>
-                    <th className="py-3.5 px-6 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
-                  {filteredBusinesses.map(bus => {
-                    const subStatus = bus.subscriptionStatus || 'trial';
+            <div className="space-y-4">
+              {/* Category Filter Chips & Actions */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 sm:pb-0">
+                  <button
+                    onClick={() => setBizCategoryFilter('all')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 min-h-[38px] ${
+                      bizCategoryFilter === 'all' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    All ({businesses.length})
+                  </button>
+                  <button
+                    onClick={() => setBizCategoryFilter('school')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 flex items-center gap-1.5 min-h-[38px] ${
+                      bizCategoryFilter === 'school' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <GraduationCap className="h-4 w-4" /> Schools ({businesses.filter(b => b.category?.toLowerCase().includes('school')).length})
+                  </button>
+                  <button
+                    onClick={() => setBizCategoryFilter('other')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 min-h-[38px] ${
+                      bizCategoryFilter === 'other' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Retail &amp; Other ({businesses.filter(b => !b.category?.toLowerCase().includes('school')).length})
+                  </button>
+                </div>
 
-                    return (
-                      <tr key={bus.id} className="hover:bg-slate-50/50 transition">
-                        <td className="py-3.5 px-6">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleOpenRegisterBusiness}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition min-h-[44px]"
+                  >
+                    <Plus className="h-4 w-4" /> Register Business
+                  </button>
+                </div>
+              </div>
+
+              {/* Mobile Phone Cards (visible only on mobile) */}
+              <div className="block lg:hidden space-y-3">
+                {filteredBusinesses.map(bus => {
+                  const isSchool = bus.category?.toLowerCase().includes('school');
+                  return (
+                    <div key={bus.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 ${
+                            isSchool ? 'bg-indigo-600 shadow-indigo-200 shadow-md' : 'bg-emerald-600 shadow-emerald-200 shadow-md'
+                          }`}>
+                            {isSchool ? <GraduationCap className="h-5 w-5" /> : bus.name.charAt(0)}
+                          </div>
                           <div>
-                            <p className="font-bold text-slate-800 text-sm">{bus.name}</p>
+                            <h4 className="font-extrabold text-slate-900 text-sm leading-snug">{bus.name}</h4>
                             <p className="text-[10px] text-slate-400 font-mono">ID: {bus.id}</p>
                           </div>
-                        </td>
-                        <td className="py-3.5 px-6">
-                          <div>
-                            <p className="font-bold text-slate-800">{bus.ownerName}</p>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-6">
-                          <div className="space-y-0.5">
-                            <p className="font-semibold text-slate-600">{bus.email}</p>
-                            {bus.phone && <p className="text-slate-400 text-[11px]">{bus.phone}</p>}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-6">
-                          <span className="inline-block px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] rounded-md font-bold uppercase">
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold shrink-0 ${
+                          bus.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                        }`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                          {bus.status === 'active' ? 'Active' : 'Suspended'}
+                        </span>
+                      </div>
+
+                      <div className="bg-slate-50 p-3 rounded-xl text-xs space-y-1.5 text-slate-700 border border-slate-100">
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">Type:</span>
+                          <span className="font-bold text-slate-800 bg-white px-2 py-0.5 rounded-md border border-slate-200 text-[10px]">
                             {bus.category || 'General'}
                           </span>
-                        </td>
-                        <td className="py-3.5 px-6">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold leading-none ${
-                            bus.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                          }`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
-                            {bus.status === 'active' ? 'Active' : 'Suspended'}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-6 text-slate-500 font-medium">
-                          {bus.createdAt ? new Date(bus.createdAt).toLocaleDateString() : 'N/A'}
-                        </td>
-                        <td className="py-3.5 px-6 text-right">
-                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                            <button
-                              onClick={() => handleEditBusinessClick(bus)}
-                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                              title="Edit Business Details"
-                            >
-                              <Edit className="h-3.5 w-3.5" /> Edit
-                            </button>
-                            <button
-                              onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
-                              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
-                                bus.status === 'active' 
-                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-800' 
-                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                              }`}
-                              title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
-                            >
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                              {bus.status === 'active' ? 'Suspend' : 'Activate'}
-                            </button>
-                            <button
-                              onClick={() => handleDeleteBusiness(bus.id)}
-                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                              title="Delete Business Tenant"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" /> Delete
-                            </button>
-                            <button
-                              onClick={() => setViewingBusiness(bus)}
-                              className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                              title="View Business Details"
-                            >
-                              <Eye className="h-3.5 w-3.5" /> View
-                            </button>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">{isSchool ? 'Principal / Head:' : 'Owner:'}</span>
+                          <span className="font-semibold text-slate-800">{bus.ownerName}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">Email:</span>
+                          <span className="text-slate-600 font-mono truncate max-w-[180px]">{bus.email}</span>
+                        </div>
+                        {bus.phone && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-400 font-medium">Phone:</span>
+                            <span className="text-slate-800 font-mono">{bus.phone}</span>
                           </div>
+                        )}
+                      </div>
+
+                      {/* Action buttons with touch target (min-h-[44px]) */}
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                        {onManageBusiness && (
+                          <button
+                            onClick={() => onManageBusiness(bus)}
+                            className="col-span-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[44px]"
+                          >
+                            <Building className="h-4 w-4" /> Enter {isSchool ? 'School' : 'Business'} Workspace
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleEditBusinessClick(bus)}
+                          className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
+                        >
+                          <Edit className="h-3.5 w-3.5" /> Edit Details
+                        </button>
+                        <button
+                          onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
+                          className={`py-2.5 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px] ${
+                            bus.status === 'active' ? 'bg-amber-50 text-amber-800 hover:bg-amber-100' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          }`}
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5" /> {bus.status === 'active' ? 'Suspend' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => setViewingBusiness(bus)}
+                          className="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
+                        >
+                          <Eye className="h-3.5 w-3.5" /> Quick View
+                        </button>
+                        <button
+                          onClick={() => handleDeleteBusiness(bus.id)}
+                          className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Delete {isSchool ? 'School' : 'Business'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredBusinesses.length === 0 && (
+                  <div className="py-8 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+                    No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your query.
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
+                      <th className="py-3.5 px-6">Business / School Name</th>
+                      <th className="py-3.5 px-6">Owner / Principal</th>
+                      <th className="py-3.5 px-6">Email</th>
+                      <th className="py-3.5 px-6">Business Type</th>
+                      <th className="py-3.5 px-6">Status</th>
+                      <th className="py-3.5 px-6">Created Date</th>
+                      <th className="py-3.5 px-6 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
+                    {filteredBusinesses.map(bus => {
+                      const subStatus = bus.subscriptionStatus || 'trial';
+                      const isSchool = bus.category?.toLowerCase().includes('school');
+
+                      return (
+                        <tr key={bus.id} className="hover:bg-slate-50/50 transition">
+                          <td className="py-3.5 px-6">
+                            <div className="flex items-center gap-3">
+                              <div className={`h-8 w-8 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 ${
+                                isSchool ? 'bg-indigo-600' : 'bg-emerald-600'
+                              }`}>
+                                {isSchool ? <GraduationCap className="h-4 w-4" /> : bus.name.charAt(0)}
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-800 text-sm">{bus.name}</p>
+                                <p className="text-[10px] text-slate-400 font-mono">ID: {bus.id}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <div>
+                              <p className="font-bold text-slate-800">{bus.ownerName}</p>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <div className="space-y-0.5">
+                              <p className="font-semibold text-slate-600">{bus.email}</p>
+                              {bus.phone && <p className="text-slate-400 text-[11px]">{bus.phone}</p>}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <span className={`inline-block px-2.5 py-1 text-[10px] rounded-md font-bold uppercase ${
+                              isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {bus.category || 'General'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold leading-none ${
+                              bus.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                            }`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                              {bus.status === 'active' ? 'Active' : 'Suspended'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-6 text-slate-500 font-medium">
+                            {bus.createdAt ? new Date(bus.createdAt).toLocaleDateString() : 'N/A'}
+                          </td>
+                          <td className="py-3.5 px-6 text-right">
+                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                              {onManageBusiness && (
+                                <button
+                                  onClick={() => onManageBusiness(bus)}
+                                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                  title="Enter Business Workspace"
+                                >
+                                  <Building className="h-3.5 w-3.5" /> Workspace
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleEditBusinessClick(bus)}
+                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title="Edit Business Details"
+                              >
+                                <Edit className="h-3.5 w-3.5" /> Edit
+                              </button>
+                              <button
+                                onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                  bus.status === 'active' 
+                                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800' 
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                }`}
+                                title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                {bus.status === 'active' ? 'Suspend' : 'Activate'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBusiness(bus.id)}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title={`Delete ${isSchool ? 'School' : 'Business'} Tenant`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" /> Delete
+                              </button>
+                              <button
+                                onClick={() => setViewingBusiness(bus)}
+                                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title="View Business Details"
+                              >
+                                <Eye className="h-3.5 w-3.5" /> View
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredBusinesses.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-slate-400">
+                          No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
                         </td>
                       </tr>
-                    );
-                  })}
-                  {filteredBusinesses.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400">
-                        No registered business tenants match your search query.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
@@ -2184,8 +2395,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   <Trash2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">Delete Registered Business</h3>
-                  <p className="text-xs text-rose-600 font-semibold">Permanent Cloud Deletion</p>
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    Delete Registered {deletingBusinessTarget.category === 'school' ? 'School' : 'Business'}
+                  </h3>
+                  <p className="text-xs text-rose-600 font-semibold">Permanent Cloud &amp; Database Purge</p>
                 </div>
               </div>
               {!isDeletingInProgress && (
@@ -2203,39 +2416,59 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 text-xs font-bold leading-relaxed flex items-start gap-2.5">
                 <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
                 <div>
-                  <strong>Are you sure you want to permanently delete this business? This action cannot be undone.</strong>
+                  <strong>
+                    Are you sure you want to permanently delete &ldquo;{deletingBusinessTarget.name}&rdquo;?
+                  </strong>
+                  <p className="text-rose-700 font-normal mt-1">
+                    This action is permanent and cannot be undone. All tenant data tied to ID <span className="font-mono font-bold text-rose-900">{deletingBusinessTarget.id}</span> will be purged from Firebase and cloud storage immediately.
+                  </p>
                 </div>
               </div>
 
               <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-xs space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Business Name:</span>
+                  <span className="text-slate-500 font-medium">{deletingBusinessTarget.category === 'school' ? 'School Name:' : 'Business Name:'}</span>
                   <span className="font-extrabold text-slate-800">{deletingBusinessTarget.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Business ID:</span>
-                  <span className="font-mono text-slate-700 text-[11px]">{deletingBusinessTarget.id}</span>
+                  <span className="text-slate-500 font-medium">Tenant ID:</span>
+                  <span className="font-mono text-slate-700 text-[11px] font-bold">{deletingBusinessTarget.id}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Owner:</span>
+                  <span className="text-slate-500 font-medium">Owner / Principal:</span>
                   <span className="font-bold text-slate-800">{deletingBusinessTarget.ownerName} ({deletingBusinessTarget.ownerEmail || deletingBusinessTarget.email})</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Category / Type:</span>
+                  <span className="text-slate-500 font-medium">Category:</span>
                   <span className="font-semibold text-slate-700 uppercase">{deletingBusinessTarget.category || deletingBusinessTarget.type}</span>
                 </div>
               </div>
 
               <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 space-y-1">
-                <p className="font-bold text-amber-950 uppercase tracking-wider text-[10px]">The following data will be permanently wiped:</p>
+                <p className="font-bold text-amber-950 uppercase tracking-wider text-[10px]">
+                  Data to be permanently wiped for this tenant only:
+                </p>
                 <ul className="list-disc list-inside space-y-0.5 text-amber-900 font-medium">
-                  <li>Business workspace settings &amp; configurations</li>
-                  <li>All products, inventory, services &amp; stock movements</li>
-                  <li>All sales, receipts, invoices &amp; payment transactions</li>
-                  <li>All customers, suppliers, expenses &amp; reports</li>
-                  <li>All staff user accounts, roles &amp; auth tokens</li>
-                  <li>All cloud Firestore documents, storage files &amp; images</li>
+                  <li>Workspace configuration, settings, and branding</li>
+                  <li>All tenant users, roles, staff profiles &amp; authentication credentials</li>
+                  {deletingBusinessTarget.category === 'school' ? (
+                    <>
+                      <li>Student profiles, teachers, classes &amp; academic timetables</li>
+                      <li>Tuition invoices, fee payments, receipts &amp; balances</li>
+                      <li>Daily attendance logs, exam grades &amp; parent announcements</li>
+                    </>
+                  ) : (
+                    <>
+                      <li>All products, inventory, services &amp; stock movements</li>
+                      <li>All POS sales, invoices, receipts &amp; payment transactions</li>
+                      <li>All customers, suppliers, expenses &amp; operational logs</li>
+                    </>
+                  )}
+                  <li>All Firestore documents, cloud backups, and uploaded attachments</li>
                 </ul>
+                <p className="text-[10px] text-emerald-800 font-bold pt-1">
+                  ✓ Isolated tenant scope: Data belonging to other businesses or schools will NOT be affected.
+                </p>
               </div>
 
               {deleteErrorMessage && (
@@ -2250,14 +2483,15 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               <div className="p-6 bg-slate-900 text-white rounded-2xl flex flex-col items-center justify-center gap-3 text-center">
                 <RefreshCw className="h-8 w-8 text-rose-500 animate-spin" />
                 <div>
-                  <p className="font-black text-sm">Deleting business and purging all cloud data...</p>
-                  <p className="text-xs text-slate-400 mt-1">Please wait while database documents, users, files, and audit logs are permanently wiped.</p>
+                  <p className="font-black text-sm">Deleting tenant and purging all cloud data...</p>
+                  <p className="text-xs text-slate-400 mt-1">Please wait while database documents, users, and audit records are wiped.</p>
                 </div>
               </div>
             ) : (
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
+                  id="btn-cancel-delete-biz"
                   onClick={() => setDeletingBusinessTarget(null)}
                   className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
                 >
@@ -2265,10 +2499,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </button>
                 <button
                   type="button"
+                  id="btn-confirm-delete-biz"
                   onClick={executeDeleteBusiness}
                   className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition"
                 >
-                  <Trash2 className="h-4 w-4" /> Delete
+                  <Trash2 className="h-4 w-4" /> Permanently Delete
                 </button>
               </div>
             )}

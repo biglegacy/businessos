@@ -97,6 +97,13 @@ app.post('/api/db/save', (req, res) => {
   }
 });
 
+// Helper to safely execute async tasks with quick timeout
+const withTimeout = <T>(promise: Promise<T>, ms = 1200): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for cloud auth')), ms))
+  ]);
+
 // Helper to execute permanent deletion across Firestore, Auth, and Cloud DB
 async function performPermanentBusinessDeletion(businessId: string, clientIp: string, superAdminInfo?: any) {
   if (!businessId || typeof businessId !== 'string') {
@@ -124,18 +131,18 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
       const authAdmin = getAuth();
       for (const email of Array.from(userEmailsToDelete)) {
         try {
-          const userRecord = await authAdmin.getUserByEmail(email);
+          const userRecord = await withTimeout(authAdmin.getUserByEmail(email), 1000);
           if (userRecord && userRecord.uid) {
-            await authAdmin.deleteUser(userRecord.uid);
+            await withTimeout(authAdmin.deleteUser(userRecord.uid), 1000);
             deletedAuthAccountsCount++;
             console.log(`[Firebase Admin Auth] Deleted user account: ${email} (${userRecord.uid})`);
           }
         } catch (authErr: any) {
-          console.log(`[Firebase Admin Auth Note for ${email}]: ${authErr?.message || authErr}`);
+          // Non-blocking
         }
       }
     } catch (e) {
-      console.warn('[Firebase Admin Auth deletion error]:', e);
+      console.warn('[Firebase Admin Auth deletion note]:', e);
     }
   }
 
@@ -167,7 +174,10 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
     'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports',
     'bos_travel_packages', 'bos_travel_transports', 'bos_travel_insurances',
     'bos_travel_suppliers', 'bos_travel_partners', 'bos_travel_documents',
-    'bos_travel_marketings'
+    'bos_travel_marketings',
+    'bos_students', 'bos_teachers', 'bos_classes', 'bos_fee_invoices',
+    'bos_fee_payments', 'bos_attendance', 'bos_exam_grades', 'bos_timetable',
+    'bos_school_announcements'
   ];
 
   if (getApps().length) {
@@ -175,26 +185,33 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
       const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
       const firestoreDb = getFirestore(undefined, dbId);
 
-      for (const colName of collectionsToPurge) {
+      await Promise.all(collectionsToPurge.map(async (colName) => {
         // Direct document deletion
         try {
           const directDocRef = firestoreDb.collection(colName).doc(businessId);
-          const docSnap = await directDocRef.get();
-          if (docSnap.exists) {
-            await directDocRef.delete();
-          }
+          await withTimeout(directDocRef.delete(), 800);
         } catch (e) {}
 
         // Query documents by businessId == businessId
         try {
-          const snapshot = await firestoreDb.collection(colName).where('businessId', '==', businessId).get();
-          if (!snapshot.empty) {
+          const snapshot = await withTimeout(firestoreDb.collection(colName).where('businessId', '==', businessId).get(), 1000);
+          if (snapshot && !snapshot.empty) {
             const batch = firestoreDb.batch();
             snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
+            await withTimeout(batch.commit(), 1000);
           }
         } catch (e) {}
-      }
+
+        // Also query documents by schoolId == businessId for school collections
+        try {
+          const snapshot = await withTimeout(firestoreDb.collection(colName).where('schoolId', '==', businessId).get(), 1000);
+          if (snapshot && !snapshot.empty) {
+            const batch = firestoreDb.batch();
+            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            await withTimeout(batch.commit(), 1000);
+          }
+        } catch (e) {}
+      }));
     } catch (fsErr) {
       console.warn('[Firebase Admin Firestore deletion note]:', fsErr);
     }
@@ -208,7 +225,7 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
       if (key === 'bos_businesses' || key === 'businesses') {
         dbData[key] = dbData[key].filter((b: any) => b && b.id !== businessId);
       } else {
-        dbData[key] = dbData[key].filter((item: any) => item && item.businessId !== businessId);
+        dbData[key] = dbData[key].filter((item: any) => item && item.businessId !== businessId && item.schoolId !== businessId && item.id !== businessId);
       }
       totalPurgedRecords += (initialCount - dbData[key].length);
     }

@@ -171,5 +171,38 @@ service cloud.firestore {
     match /bos_travel_marketings/{id} {
       allow read, write: if true;
     }
+    match /bos_students/{id} {
+      allow read, write: if true;
+    }
+    match /bos_teachers/{id} {
+      allow read, write: if true;
+    }
+    match /bos_classes/{id} {
+      allow read, write: if true;
+    }
+    match /bos_fee_invoices/{id} {
+      allow read, write: if true;
+    }
+    match /bos_fee_payments/{id} {
+      allow read, write: if true;
+    }
+    match /bos_attendance/{id} {
+      allow read, write: if true;
+    }
+    match /bos_exam_grades/{id} {
+      allow read, write: if true;
+    }
+    match /bos_timetable/{id} {
+      allow read, write: if true;
+    }
+    match /bos_school_announcements/{id} {
+      allow read, write: if true;
+    }
+    match /bos_sms_settings/{id} {
+      allow read, write: if true;
+    }
+    match /bos_whatsapp_settings/{id} {
+      allow read, write: if true;
+    }
   }
 }

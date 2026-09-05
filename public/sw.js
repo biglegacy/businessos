@@ -1,11 +1,16 @@
-const CACHE_NAME = 'businessos-cache-v1';
+const CACHE_NAME = 'businessos-cache-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
+  '/manifest.webmanifest',
   '/manifest.json',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap',
-  'https://img.icons8.com/color/192/company.png',
-  'https://img.icons8.com/color/512/company.png'
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-192.png',
+  '/icon-maskable-512.png',
+  '/apple-touch-icon.png',
+  '/favicon.png',
+  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap'
 ];
 
 // Perform service worker installation and pre-cache key static assets individually to tolerate missing files
