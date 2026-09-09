@@ -1,6 +1,32 @@
 {
   "bos_logs": [
     {
+      "id": "audit-del-1788954773370-hm7d",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "b-temp-test-999",
+      "businessName": "Temporary Test Business",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-09T11:52:53.370Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Temporary Test Business\" (ID: b-temp-test-999), purged 1 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788954672088-3mbf",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "b-test-temp",
+      "businessName": "b-test-temp",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-09T11:51:12.088Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"b-test-temp\" (ID: b-test-temp), purged 0 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
       "id": "audit-del-1788608505750-2mo5",
       "action": "PERMANENT_DELETE_BUSINESS",
       "businessId": "non-existent-biz-123",
@@ -2971,6 +2997,32 @@
   ],
   "bos_feature_audit_logs": [
     {
+      "id": "audit-del-1788954773370-hm7d",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "b-temp-test-999",
+      "businessName": "Temporary Test Business",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-09T11:52:53.370Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"Temporary Test Business\" (ID: b-temp-test-999), purged 1 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
+      "id": "audit-del-1788954672088-3mbf",
+      "action": "PERMANENT_DELETE_BUSINESS",
+      "businessId": "b-test-temp",
+      "businessName": "b-test-temp",
+      "superAdminId": "superadmin",
+      "superAdminEmail": "admin@businessos.com",
+      "superAdminName": "Super Admin",
+      "timestamp": "2026-09-09T11:51:12.088Z",
+      "ipAddress": "127.0.0.1",
+      "status": "Success",
+      "details": "Super Admin permanently deleted business \"b-test-temp\" (ID: b-test-temp), purged 0 database records, and deleted 0 Firebase Auth accounts."
+    },
+    {
       "id": "audit-del-1788608505750-2mo5",
       "action": "PERMANENT_DELETE_BUSINESS",
       "businessId": "non-existent-biz-123",
@@ -4259,7 +4311,9 @@
   ],
   "bos_products": [],
   "bos_deleted_business_ids": [
-    "non-existent-biz-123"
+    "non-existent-biz-123",
+    "b-test-temp",
+    "b-temp-test-999"
   ],
   "bos_students": []
 }

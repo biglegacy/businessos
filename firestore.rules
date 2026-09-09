@@ -1,208 +1,349 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if user is signed in
+    // ---------------------------------------------------------
+    // SECURITY HELPER FUNCTIONS
+    // ---------------------------------------------------------
+
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // Default catch-all
-    match /{document=**} {
-      allow read, write: if true;
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.role == 'super_admin' ||
+        request.auth.token.email in ['admin@businessos.com', 'superadmin@businessos.com'] ||
+        (request.auth.token.keys().hasAny(['isSuperAdmin']) && request.auth.token.isSuperAdmin == true)
+      );
     }
 
-    // Workspace & Business Collections
-    match /bos_businesses/{businessId} {
-      allow read, write: if true;
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
-    match /bos_users/{userId} {
-      allow read, write: if true;
+
+    function isTenantMember(businessId) {
+      return isSignedIn() && (
+        isSuperAdmin() ||
+        (request.auth.token.keys().hasAny(['businessId']) && request.auth.token.businessId == businessId) ||
+        request.auth.uid == businessId
+      );
     }
-    match /bos_products/{productId} {
-      allow read, write: if true;
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
     }
-    match /bos_services/{serviceId} {
-      allow read, write: if true;
+
+    // Default catch-all: DENY ALL UNMATCHED PATHS
+    match /{document=**} {
+      allow read, write: if false;
     }
-    match /bos_customers/{customerId} {
-      allow read, write: if true;
-    }
-    match /bos_sales/{saleId} {
-      allow read, write: if true;
-    }
-    match /bos_expenses/{expenseId} {
-      allow read, write: if true;
-    }
-    match /bos_logs/{logId} {
-      allow read, write: if true;
-    }
-    match /bos_branches/{branchId} {
-      allow read, write: if true;
-    }
-    match /bos_customer_returns/{id} {
-      allow read, write: if true;
-    }
-    match /bos_supplier_returns/{id} {
-      allow read, write: if true;
-    }
-    match /bos_stock_transfers/{id} {
-      allow read, write: if true;
-    }
-    match /bos_global_features/{id} {
-      allow read, write: if true;
-    }
-    match /bos_feature_audit_logs/{id} {
-      allow read, write: if true;
-    }
-    match /bos_service_jobs/{id} {
-      allow read, write: if true;
-    }
-    match /bos_menu_items/{id} {
-      allow read, write: if true;
-    }
-    match /bos_ingredients/{id} {
-      allow read, write: if true;
-    }
-    match /bos_recipes/{id} {
-      allow read, write: if true;
-    }
-    match /bos_restaurant_tables/{id} {
-      allow read, write: if true;
-    }
-    match /bos_restaurant_orders/{id} {
-      allow read, write: if true;
-    }
-    match /bos_reservations/{id} {
-      allow read, write: if true;
-    }
-    match /bos_suppliers/{id} {
-      allow read, write: if true;
-    }
-    match /bos_notifications/{id} {
-      allow read, write: if true;
-    }
-    match /bos_printer_settings/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fast_food_orders/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fast_food_ingredients/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fast_food_menu_items/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fast_food_recipes/{id} {
-      allow read, write: if true;
-    }
-    match /bos_notification_preferences/{id} {
-      allow read, write: if true;
-    }
-    match /bos_push_device_tokens/{id} {
-      allow read, write: if true;
-    }
-    match /bos_notification_logs/{id} {
-      allow read, write: if true;
-    }
-    match /bos_salon_appointments/{id} {
-      allow read, write: if true;
-    }
-    match /bos_salon_staff/{id} {
-      allow read, write: if true;
-    }
-    match /bos_laundry_orders/{id} {
-      allow read, write: if true;
-    }
-    match /bos_scanner_sessions/{id} {
-      allow read, write: if true;
-    }
-    match /bos_scanned_items/{id} {
-      allow read, write: if true;
-    }
-    match /bos_print_commands/{id} {
-      allow read, write: if true;
-    }
-    match /bos_payment_transactions/{id} {
-      allow read, write: if true;
-    }
-    match /bos_paynow_settings/{id} {
-      allow read, write: if true;
-    }
+
+    // ---------------------------------------------------------
+    // PLATFORM CONFIGURATION & AUDIT LOGS (SUPER ADMIN ONLY)
+    // ---------------------------------------------------------
+
     match /bos_global_system_config/{id} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
     }
-    match /bos_travel_customers/{id} {
-      allow read, write: if true;
+
+    match /bos_global_features/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
     }
-    match /bos_travel_bookings/{id} {
-      allow read, write: if true;
+
+    match /bos_feature_audit_logs/{id} {
+      allow read: if isSuperAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
     }
-    match /bos_travel_flights/{id} {
-      allow read, write: if true;
+
+    match /bos_paynow_settings/{id} {
+      allow read: if isSuperAdmin() || (isSignedIn() && (resource == null || resource.data.businessId == request.auth.token.businessId));
+      allow write: if isSuperAdmin();
     }
-    match /bos_travel_hotels/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_visas/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_passports/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_packages/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_transports/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_insurances/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_suppliers/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_partners/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_documents/{id} {
-      allow read, write: if true;
-    }
-    match /bos_travel_marketings/{id} {
-      allow read, write: if true;
-    }
-    match /bos_students/{id} {
-      allow read, write: if true;
-    }
-    match /bos_teachers/{id} {
-      allow read, write: if true;
-    }
-    match /bos_classes/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fee_invoices/{id} {
-      allow read, write: if true;
-    }
-    match /bos_fee_payments/{id} {
-      allow read, write: if true;
-    }
-    match /bos_attendance/{id} {
-      allow read, write: if true;
-    }
-    match /bos_exam_grades/{id} {
-      allow read, write: if true;
-    }
-    match /bos_timetable/{id} {
-      allow read, write: if true;
-    }
-    match /bos_school_announcements/{id} {
-      allow read, write: if true;
-    }
+
     match /bos_sms_settings/{id} {
-      allow read, write: if true;
+      allow read: if isSuperAdmin() || (isSignedIn() && (resource == null || resource.data.businessId == request.auth.token.businessId));
+      allow write: if isSuperAdmin();
     }
+
     match /bos_whatsapp_settings/{id} {
-      allow read, write: if true;
+      allow read: if isSuperAdmin() || (isSignedIn() && (resource == null || resource.data.businessId == request.auth.token.businessId));
+      allow write: if isSuperAdmin();
+    }
+
+    match /bos_notification_logs/{id} {
+      allow read: if isSignedIn() && (isSuperAdmin() || resource.data.businessId == request.auth.token.businessId);
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /bos_push_device_tokens/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_notification_preferences/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // BUSINESS TENANTS & USER DIRECTORY
+    // ---------------------------------------------------------
+
+    match /bos_businesses/{businessId} {
+      // Super admin can read/write any business
+      // Authenticated users can read their own business workspace
+      // Public registration allowed for creating new tenant workspace
+      allow get: if isSignedIn() || request.auth == null;
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() || request.auth == null;
+      allow update: if isSuperAdmin() || (isSignedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        resource.data.ownerEmail == request.auth.token.email ||
+        request.auth.token.businessId == businessId
+      ));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /bos_users/{userId} {
+      allow get: if isSignedIn() && (isSelf(userId) || isSuperAdmin() || resource.data.businessId == request.auth.token.businessId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() || isSelf(userId) || isSuperAdmin();
+      allow update: if isSignedIn() && (isSelf(userId) || isSuperAdmin() || resource.data.businessId == request.auth.token.businessId);
+      allow delete: if isSuperAdmin() || (isSignedIn() && resource.data.businessId == request.auth.token.businessId);
+    }
+
+    // ---------------------------------------------------------
+    // TENANT WORKSPACE DATA COLLECTIONS
+    // ---------------------------------------------------------
+
+    match /bos_products/{productId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_services/{serviceId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_customers/{customerId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_sales/{saleId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_expenses/{expenseId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_logs/{logId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_branches/{branchId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_customer_returns/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_supplier_returns/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_stock_transfers/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_service_jobs/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_suppliers/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_notifications/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_printer_settings/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_print_commands/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_payment_transactions/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_scanner_sessions/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_scanned_items/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // VERTICAL MODULES: RESTAURANT & FAST FOOD
+    // ---------------------------------------------------------
+
+    match /bos_menu_items/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_ingredients/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_recipes/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_restaurant_tables/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_restaurant_orders/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_reservations/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fast_food_orders/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fast_food_ingredients/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fast_food_menu_items/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fast_food_recipes/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // VERTICAL MODULES: SALON & LAUNDRY
+    // ---------------------------------------------------------
+
+    match /bos_salon_appointments/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_salon_staff/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_laundry_orders/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // VERTICAL MODULES: TRAVEL AGENCY
+    // ---------------------------------------------------------
+
+    match /bos_travel_customers/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_bookings/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_flights/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_hotels/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_visas/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_passports/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_packages/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_transports/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_insurances/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_suppliers/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_partners/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_documents/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_travel_marketings/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // VERTICAL MODULES: SCHOOL MANAGEMENT
+    // ---------------------------------------------------------
+
+    match /bos_students/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_teachers/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_classes/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fee_invoices/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_fee_payments/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_attendance/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_exam_grades/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_timetable/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /bos_school_announcements/{id} {
+      allow read, write: if isSignedIn();
     }
   }
 }

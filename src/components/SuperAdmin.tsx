@@ -8,9 +8,10 @@ import { db } from '../lib/db';
 import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES } from '../types';
 import { 
   Building, Users, Shield, CheckCircle2, AlertTriangle, Trash2, 
-  Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye,
+  Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye, EyeOff,
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
-  Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu
+  Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
+  MessageSquare, Send, Smartphone, ShieldCheck
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -24,7 +25,7 @@ interface SuperAdminProps {
 
 export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [activeTab, setActiveTab] = useState<
-    'businesses' | 'paynow' | 'users' | 'notifications' | 'registration' | 'system' | 'cloud' | 'monitoring' | 'features'
+    'businesses' | 'paynow' | 'sms' | 'users' | 'notifications' | 'registration' | 'system' | 'cloud' | 'monitoring' | 'features'
   >('businesses');
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -49,6 +50,148 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [payNowTesting, setPayNowTesting] = useState(false);
   const [payNowTestResult, setPayNowTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // --- Central Arkesel SMS Settings State ---
+  const [smsConfig, setSmsConfig] = useState<{
+    provider: string;
+    senderId: string;
+    apiEndpoint: string;
+    isEnabled: boolean;
+    hasApiKey: boolean;
+    maskedApiKey: string;
+    lastTestedAt: string | null;
+    lastTestStatus: string;
+    lastTestMessage: string | null;
+    totalSentCount: number;
+  }>({
+    provider: 'Arkesel',
+    senderId: 'BusinessOS',
+    apiEndpoint: 'https://sms.arkesel.com/api/v2/sms/send',
+    isEnabled: true,
+    hasApiKey: false,
+    maskedApiKey: '',
+    lastTestedAt: null,
+    lastTestStatus: 'Not Connected',
+    lastTestMessage: null,
+    totalSentCount: 0
+  });
+
+  const [smsApiKeyInput, setSmsApiKeyInput] = useState('');
+  const [smsSenderIdInput, setSmsSenderIdInput] = useState('BusinessOS');
+  const [smsEndpointInput, setSmsEndpointInput] = useState('https://sms.arkesel.com/api/v2/sms/send');
+  const [smsIsEnabled, setSmsIsEnabled] = useState(true);
+  const [showSmsApiKey, setShowSmsApiKey] = useState(false);
+  const [smsSaving, setSmsSaving] = useState(false);
+  const [smsSaveMessage, setSmsSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Test SMS State
+  const [testPhoneNumber, setTestPhoneNumber] = useState('');
+  const [testSmsMessage, setTestSmsMessage] = useState('BusinessOS Gateway Test: Arkesel SMS is active and delivered successfully.');
+  const [isSendingTestSms, setIsSendingTestSms] = useState(false);
+  const [testSmsResult, setTestSmsResult] = useState<{
+    status: string;
+    message: string;
+    success: boolean;
+    recipient?: string;
+  } | null>(null);
+
+  // SMS Delivery Logs State
+  const [smsLogs, setSmsLogs] = useState<any[]>([]);
+  const [isLoadingSmsLogs, setIsLoadingSmsLogs] = useState(false);
+
+  // Fetch SMS configuration & delivery logs on tab change
+  useEffect(() => {
+    if (activeTab === 'sms') {
+      loadSmsConfigAndLogs();
+    }
+  }, [activeTab]);
+
+  const loadSmsConfigAndLogs = async () => {
+    setIsLoadingSmsLogs(true);
+    try {
+      const data = await db.getSmsSettings();
+      if (data) {
+        setSmsConfig(data);
+        setSmsSenderIdInput(data.senderId || 'BusinessOS');
+        setSmsEndpointInput(data.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send');
+        setSmsIsEnabled(data.isEnabled !== undefined ? data.isEnabled : true);
+        if (data.maskedApiKey) {
+          setSmsApiKeyInput(data.maskedApiKey);
+        }
+      }
+      const logs = await db.getSmsLogs();
+      setSmsLogs(logs || []);
+    } catch (err) {
+      console.warn('Error loading SMS configuration:', err);
+    } finally {
+      setIsLoadingSmsLogs(false);
+    }
+  };
+
+  const handleSaveSmsConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSmsSaving(true);
+    setSmsSaveMessage(null);
+
+    try {
+      const result = await db.saveSmsSettings({
+        apiKey: smsApiKeyInput,
+        senderId: smsSenderIdInput,
+        apiEndpoint: smsEndpointInput,
+        isEnabled: smsIsEnabled
+      });
+
+      if (result.success) {
+        setSmsSaveMessage({ type: 'success', text: result.message || 'Arkesel SMS configuration saved successfully!' });
+        if (result.config) {
+          setSmsConfig(prev => ({ ...prev, ...result.config }));
+          if (result.config.maskedApiKey) {
+            setSmsApiKeyInput(result.config.maskedApiKey);
+          }
+        }
+      } else {
+        setSmsSaveMessage({ type: 'error', text: result.message || 'Failed to save configuration.' });
+      }
+    } catch (err: any) {
+      setSmsSaveMessage({ type: 'error', text: err.message || 'Network error while saving settings.' });
+    } finally {
+      setSmsSaving(false);
+      setTimeout(() => setSmsSaveMessage(null), 5000);
+    }
+  };
+
+  const handleSendTestSms = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testPhoneNumber.trim()) {
+      setTestSmsResult({
+        success: false,
+        status: 'Invalid phone number',
+        message: 'Please provide a recipient phone number for the test SMS.'
+      });
+      return;
+    }
+
+    setIsSendingTestSms(true);
+    setTestSmsResult(null);
+
+    try {
+      const res = await db.sendTestSms(testPhoneNumber.trim(), testSmsMessage.trim());
+      setTestSmsResult(res);
+      // Refresh configuration and logs to update status badges and stats
+      const updatedConfig = await db.getSmsSettings();
+      if (updatedConfig) setSmsConfig(updatedConfig);
+      const updatedLogs = await db.getSmsLogs();
+      if (updatedLogs) setSmsLogs(updatedLogs);
+    } catch (err: any) {
+      setTestSmsResult({
+        success: false,
+        status: 'Network error',
+        message: err.message || 'Network error executing test SMS.'
+      });
+    } finally {
+      setIsSendingTestSms(false);
+    }
+  };
+
   // --- Global System Config State ---
   const [sysConfigState, setSysConfigState] = useState<GlobalSystemConfig>(() => db.getGlobalSystemConfig());
 
@@ -63,6 +206,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
   // --- Business Permanent Deletion Modal State ---
   const [deletingBusinessTarget, setDeletingBusinessTarget] = useState<Business | null>(null);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState<string>('');
   const [isDeletingInProgress, setIsDeletingInProgress] = useState<boolean>(false);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
   const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
@@ -348,11 +492,17 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     const bus = typeof targetOrId === 'string' ? businesses.find(b => b.id === targetOrId) : targetOrId;
     if (!bus) return;
     setDeleteErrorMessage(null);
+    setDeleteConfirmInput('');
     setDeletingBusinessTarget(bus);
   };
 
   const executeDeleteBusiness = async () => {
     if (!deletingBusinessTarget || isDeletingInProgress) return;
+    if (deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS') {
+      setDeleteErrorMessage('Please type "DELETE BUSINESS" exactly into the confirmation field.');
+      return;
+    }
+
     const target = deletingBusinessTarget;
     const busId = target.id;
     const busName = target.name || busId;
@@ -361,7 +511,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setDeleteErrorMessage(null);
 
     try {
-      // 1. Purge via db.deleteBusinessPermanent (handles local purge, tombstone, firestore deletion, and audit logging)
+      // 1. Purge via db.deleteBusinessPermanent
       const currentUser = db.getCurrentUser() || { id: 'superadmin', email: 'admin@businessos.com', name: 'Super Admin' };
       await db.deleteBusinessPermanent(busId, currentUser);
 
@@ -382,7 +532,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       db.purgeLocalBusinessData(busId);
 
       // 4. Update UI state immediately
+      if (viewingBusiness?.id === busId) {
+        setViewingBusiness(null);
+      }
       setDeletingBusinessTarget(null);
+      setDeleteConfirmInput('');
       setDeleteSuccessMessage(`Business / School "${busName}" has been permanently deleted from the database.`);
       setTimeout(() => setDeleteSuccessMessage(null), 6000);
       forceUpdate();
@@ -631,6 +785,15 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         </button>
 
         <button
+          onClick={() => { setActiveTab('sms'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'sms' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <MessageSquare className="h-4 w-4 text-emerald-400" /> SMS Settings (Arkesel)
+        </button>
+
+        <button
           onClick={() => { setActiveTab('users'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
             activeTab === 'users' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
@@ -760,7 +923,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <header className="hidden lg:flex h-16 bg-white border-b border-slate-200 px-8 items-center justify-between shrink-0">
           <h2 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
             {activeTab === 'businesses' && <><Building className="h-4 w-4 text-emerald-600" /> Business Tenants Management</>}
-            {activeTab === 'paynow' && <><CreditCard className="h-4 w-4 text-emerald-600" /> Pay Now API Gateway Settings</>}
+            {activeTab === 'paynow' && <><CreditCard className="h-4 w-4 text-emerald-600" /> Paystack API Gateway Settings</>}
+            {activeTab === 'sms' && <><MessageSquare className="h-4 w-4 text-emerald-600" /> Central SMS Gateway (Arkesel)</>}
             {activeTab === 'users' && <><Users className="h-4 w-4 text-emerald-600" /> Global Tenant User Directory</>}
             {activeTab === 'notifications' && <><Bell className="h-4 w-4 text-emerald-600" /> Super Admin Push Notifications Center</>}
             {activeTab === 'registration' && <><Globe className="h-4 w-4 text-emerald-600" /> Registration &amp; Access Controls</>}
@@ -1232,7 +1396,406 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
             </div>
           )}
 
-          {/* TAB 3: Users */}
+          {/* TAB: Central Arkesel SMS Settings */}
+          {activeTab === 'sms' && (
+            <div className="space-y-6">
+              {/* Header & Status Overview */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-9 w-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black">
+                        <MessageSquare className="h-5 w-5 text-emerald-700" />
+                      </div>
+                      <div>
+                        <h3 className="font-extrabold text-slate-900 text-base">
+                          Central SMS Gateway Settings
+                        </h3>
+                        <p className="text-xs text-slate-500 font-medium">
+                          Official Arkesel SMS Gateway Integration &amp; Platform-Wide Delivery
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                      !smsConfig.isEnabled 
+                        ? 'bg-slate-100 text-slate-700 border border-slate-200' 
+                        : smsConfig.hasApiKey 
+                          ? smsConfig.lastTestStatus === 'Success'
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                    }`}>
+                      <span className={`h-2 w-2 rounded-full ${
+                        !smsConfig.isEnabled 
+                          ? 'bg-slate-400' 
+                          : smsConfig.hasApiKey 
+                            ? smsConfig.lastTestStatus === 'Success' ? 'bg-emerald-500' : 'bg-indigo-500'
+                            : 'bg-amber-500'
+                      }`} />
+                      {!smsConfig.isEnabled 
+                        ? 'Service Disabled' 
+                        : smsConfig.hasApiKey 
+                          ? smsConfig.lastTestStatus === 'Success' ? 'Active & Connected' : 'Configured (Untested)' 
+                          : 'API Key Required'}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={loadSmsConfigAndLogs}
+                      disabled={isLoadingSmsLogs}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[40px]"
+                      title="Refresh status & logs"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isLoadingSmsLogs ? 'animate-spin text-emerald-600' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metrics row */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-6">
+                  <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SMS Provider</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5">Arkesel Telecom</p>
+                    <p className="text-[10px] text-emerald-700 font-semibold">Official Gateway v2</p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Sender ID</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{smsConfig.senderId || 'BusinessOS'}</p>
+                    <p className="text-[10px] text-slate-500">Max 11 Alphanumeric</p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Dispatches</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5">{smsConfig.totalSentCount || smsLogs.length}</p>
+                    <p className="text-[10px] text-slate-500">Tracked in audit logs</p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Last Test Status</p>
+                    <p className={`font-extrabold text-sm mt-0.5 ${
+                      smsConfig.lastTestStatus === 'Success' ? 'text-emerald-700' : 
+                      smsConfig.lastTestStatus === 'Not Connected' ? 'text-slate-500' : 'text-rose-600'
+                    }`}>
+                      {smsConfig.lastTestStatus || 'Not Connected'}
+                    </p>
+                    <p className="text-[10px] text-slate-400 truncate">
+                      {smsConfig.lastTestedAt ? new Date(smsConfig.lastTestedAt).toLocaleDateString() : 'Never tested'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Main Controls Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left Column: API Configuration Form */}
+                <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div>
+                      <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
+                        <Key className="h-4 w-4 text-emerald-700" /> Arkesel API Credentials
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Central credentials applied to customer receipts, fee alerts, and notifications.
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold rounded-lg uppercase">
+                      Server Secured
+                    </span>
+                  </div>
+
+                  {smsSaveMessage && (
+                    <div className={`p-3 rounded-xl text-xs font-bold flex items-center gap-2 ${
+                      smsSaveMessage.type === 'success' 
+                        ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' 
+                        : 'bg-rose-50 text-rose-900 border border-rose-200'
+                    }`}>
+                      {smsSaveMessage.type === 'success' ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                      )}
+                      <span>{smsSaveMessage.text}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSaveSmsConfig} className="space-y-4 text-xs">
+                    {/* API Key */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-xs font-bold text-slate-700 uppercase">
+                          Arkesel API Key <span className="text-rose-500">*</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowSmsApiKey(!showSmsApiKey)}
+                          className="text-[11px] font-bold text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          {showSmsApiKey ? (
+                            <><EyeOff className="h-3 w-3" /> Hide Key</>
+                          ) : (
+                            <><Eye className="h-3 w-3" /> Reveal Key</>
+                          )}
+                        </button>
+                      </div>
+                      <input
+                        type={showSmsApiKey ? 'text' : 'password'}
+                        id="input-arkesel-api-key"
+                        value={smsApiKeyInput}
+                        onChange={(e) => setSmsApiKeyInput(e.target.value)}
+                        placeholder="e.g. b291... or leave masked to retain existing key"
+                        className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition"
+                        autoComplete="off"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Obtained from your Arkesel account dashboard. Kept strictly on the server; never sent to frontend bundles.
+                      </p>
+                    </div>
+
+                    {/* Sender ID */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                        SMS Sender ID <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        id="input-arkesel-sender-id"
+                        maxLength={11}
+                        value={smsSenderIdInput}
+                        onChange={(e) => setSmsSenderIdInput(e.target.value)}
+                        placeholder="BusinessOS"
+                        className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm uppercase focus:ring-2 focus:ring-emerald-500 outline-none transition"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Up to 11 characters (letters, numbers). Must be approved in your Arkesel SMS portal.
+                      </p>
+                    </div>
+
+                    {/* API Endpoint */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                        Arkesel API Endpoint URL
+                      </label>
+                      <input
+                        type="url"
+                        id="input-arkesel-endpoint"
+                        value={smsEndpointInput}
+                        onChange={(e) => setSmsEndpointInput(e.target.value)}
+                        placeholder="https://sms.arkesel.com/api/v2/sms/send"
+                        className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 outline-none transition"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Standard Arkesel v2 REST API endpoint.
+                      </p>
+                    </div>
+
+                    {/* Enable/Disable switch */}
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <div>
+                        <p className="font-bold text-slate-800 text-xs">Enable Platform SMS Service</p>
+                        <p className="text-[11px] text-slate-500">
+                          When enabled, transactional receipts, customer messages, and school alerts will send via Arkesel.
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        id="checkbox-sms-enabled"
+                        checked={smsIsEnabled}
+                        onChange={(e) => setSmsIsEnabled(e.target.checked)}
+                        className="h-5 w-5 accent-emerald-600 rounded cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Save Button */}
+                    <div className="pt-2 flex justify-end">
+                      <button
+                        type="submit"
+                        id="btn-save-sms-config"
+                        disabled={smsSaving}
+                        className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 text-white rounded-xl font-bold text-xs shadow-md transition cursor-pointer flex items-center gap-2 min-h-[44px]"
+                      >
+                        {smsSaving ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="h-4 w-4" />
+                        )}
+                        Save SMS Configuration
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Right Column: Test SMS Sandbox */}
+                <div className="lg:col-span-5 space-y-6">
+                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                    <div className="pb-3 border-b border-slate-100">
+                      <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
+                        <Smartphone className="h-4 w-4 text-emerald-700" /> Test SMS Tool
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Send a live test message to verify Arkesel credentials, connection, and balance.
+                      </p>
+                    </div>
+
+                    <form onSubmit={handleSendTestSms} className="space-y-4 text-xs">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Recipient Phone Number <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="tel"
+                          id="input-test-phone"
+                          value={testPhoneNumber}
+                          onChange={(e) => setTestPhoneNumber(e.target.value)}
+                          placeholder="e.g. 0244123456 or +233244123456"
+                          className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Ghana local numbers (024, 055, etc.) are auto-normalized to international standard format.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Test Message Content
+                        </label>
+                        <textarea
+                          rows={3}
+                          id="input-test-message"
+                          value={testSmsMessage}
+                          onChange={(e) => setTestSmsMessage(e.target.value)}
+                          className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-2 focus:ring-emerald-500 outline-none transition"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        id="btn-send-test-sms"
+                        disabled={isSendingTestSms || !testPhoneNumber.trim()}
+                        className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs shadow transition flex items-center justify-center gap-2 cursor-pointer min-h-[44px]"
+                      >
+                        {isSendingTestSms ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                        {isSendingTestSms ? 'Transmitting to Arkesel...' : 'Send Test SMS'}
+                      </button>
+                    </form>
+
+                    {/* Test Result Display */}
+                    {testSmsResult && (
+                      <div className={`p-4 rounded-xl border text-xs space-y-2 mt-4 transition-all ${
+                        testSmsResult.success 
+                          ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950' 
+                          : 'bg-rose-50/80 border-rose-200 text-rose-950'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider ${
+                            testSmsResult.success 
+                              ? 'bg-emerald-200 text-emerald-900' 
+                              : 'bg-rose-200 text-rose-900'
+                          }`}>
+                            {testSmsResult.status}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {new Date().toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className="font-semibold text-xs leading-relaxed">
+                          {testSmsResult.message}
+                        </p>
+                        {testSmsResult.recipient && (
+                          <p className="text-[11px] text-slate-600 font-mono">
+                            Target: {testSmsResult.recipient}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* SMS Delivery Audit Logs */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-emerald-700" /> Recent SMS Delivery Log &amp; Audit Trail
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Live telemetry of messages dispatched through the central Arkesel gateway across all tenants.
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-slate-500">
+                    {smsLogs.length} Messages Logged
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
+                        <th className="py-3 px-4">Recipient</th>
+                        <th className="py-3 px-4">Sender ID</th>
+                        <th className="py-3 px-4">Message Content</th>
+                        <th className="py-3 px-4">Delivery Status</th>
+                        <th className="py-3 px-4">Timestamp</th>
+                        <th className="py-3 px-4">Gateway Response</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {smsLogs.map((log: any) => (
+                        <tr key={log.id} className="hover:bg-slate-50/50 transition">
+                          <td className="py-3 px-4 font-mono font-bold text-slate-800">
+                            {log.recipient}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
+                            {log.senderId || 'BusinessOS'}
+                          </td>
+                          <td className="py-3 px-4 max-w-xs truncate text-slate-600" title={log.message}>
+                            {log.message}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                              log.status === 'Delivered' 
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                : log.status === 'Filtered'
+                                  ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                  : 'bg-rose-50 text-rose-800 border border-rose-200'
+                            }`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${
+                                log.status === 'Delivered' ? 'bg-emerald-500' : 
+                                log.status === 'Filtered' ? 'bg-amber-500' : 'bg-rose-500'
+                              }`} />
+                              {log.status}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
+                            {new Date(log.timestamp).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-[11px] text-slate-500 max-w-xs truncate" title={log.response}>
+                            {log.response || 'OK'}
+                          </td>
+                        </tr>
+                      ))}
+                      {smsLogs.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-slate-400">
+                            No SMS messages have been dispatched through the gateway yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
           {activeTab === 'users' && (
             <div className="space-y-4">
               {/* Filters bar */}
@@ -1268,7 +1831,78 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              {/* Mobile Phone Cards for Users */}
+              <div className="block lg:hidden space-y-3">
+                {filteredUsers.map(user => {
+                  const busName = businesses.find(b => b.id === user.businessId)?.name || 'Unknown Workspace';
+                  return (
+                    <div key={user.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-extrabold text-slate-900 text-sm">{user.name}</p>
+                          <p className="text-[11px] text-slate-400 font-mono">{user.email}</p>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold shrink-0 ${
+                          user.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                        }`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${user.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                          {user.status === 'active' ? 'Active' : 'Disabled'}
+                        </span>
+                      </div>
+
+                      <div className="bg-slate-50 p-3 rounded-xl text-xs space-y-1.5 border border-slate-100">
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">Tenant Workspace:</span>
+                          <span className="font-bold text-slate-800 text-xs">{busName}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-400 font-medium">Role Permission:</span>
+                          <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] rounded-md font-bold uppercase">
+                            {user.role}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResettingUserPass(user);
+                            setNewPassVal('');
+                          }}
+                          className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
+                        >
+                          <Lock className="h-3.5 w-3.5" /> Reset Pass
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleUserStatus(user.id, user.status)}
+                          className={`py-2.5 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px] ${
+                            user.status === 'active' ? 'bg-amber-50 text-amber-800 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {user.status === 'active' ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="col-span-2 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Delete User Account
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredUsers.length === 0 && (
+                  <div className="py-8 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+                    No tenant user accounts match your filter.
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Table for Users */}
+              <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
@@ -2471,6 +3105,25 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </p>
               </div>
 
+              <div className="p-3.5 bg-rose-50/50 border border-rose-200 rounded-2xl space-y-2">
+                <label className="block text-xs font-bold text-slate-800">
+                  Type <span className="font-mono text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300 font-black">DELETE BUSINESS</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  id="input-confirm-delete-business"
+                  value={deleteConfirmInput}
+                  onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                  placeholder="Type DELETE BUSINESS to confirm"
+                  className="w-full px-3.5 py-2.5 bg-white border-2 border-slate-300 focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-xl text-xs font-bold text-slate-900 outline-none transition"
+                  autoComplete="off"
+                  disabled={isDeletingInProgress}
+                />
+                <p className="text-[10px] text-slate-500 font-medium">
+                  This safety verification prevents accidental deletion through an unintended click.
+                </p>
+              </div>
+
               {deleteErrorMessage && (
                 <div className="p-3 bg-rose-100 border border-rose-300 rounded-xl text-rose-900 text-xs font-bold">
                   Error: {deleteErrorMessage}
@@ -2492,16 +3145,20 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 <button
                   type="button"
                   id="btn-cancel-delete-biz"
-                  onClick={() => setDeletingBusinessTarget(null)}
-                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+                  onClick={() => {
+                    setDeletingBusinessTarget(null);
+                    setDeleteConfirmInput('');
+                  }}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   id="btn-confirm-delete-biz"
+                  disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
                   onClick={executeDeleteBusiness}
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition"
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[44px]"
                 >
                   <Trash2 className="h-4 w-4" /> Permanently Delete
                 </button>

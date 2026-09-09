@@ -35,7 +35,7 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
   const [grades, setGrades] = useState<ExamGrade[]>([]);
   const [timetable, setTimetable] = useState<SchoolTimetableEntry[]>([]);
   const [announcements, setAnnouncements] = useState<SchoolAnnouncement[]>([]);
-  const [smsSettings, setSmsSettings] = useState<SmsSettings>(db.getSmsSettings());
+  const [smsSettings, setSmsSettings] = useState<SmsSettings>(db.getLocalSmsSettings());
   const [whatsAppSettings, setWhatsAppSettings] = useState<WhatsAppSettings>(db.getWhatsAppSettings());
 
   // Modal states
@@ -152,7 +152,7 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
     setGrades(db.getExamGrades(business.id));
     setTimetable(db.getTimetable(business.id));
     setAnnouncements(db.getSchoolAnnouncements(business.id));
-    setSmsSettings(db.getSmsSettings());
+    setSmsSettings(db.getLocalSmsSettings());
     setWhatsAppSettings(db.getWhatsAppSettings());
 
     if (curClasses.length > 0 && !attendanceClassId) {
@@ -1094,7 +1094,7 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
             const provider = form.get('smsProvider') as any;
             const apiKey = form.get('smsApiKey') as string;
             const senderId = form.get('smsSenderId') as string;
-            db.saveSmsSettings({
+            db.saveLocalSmsSettings({
               provider,
               apiKey,
               senderId,

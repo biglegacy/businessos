@@ -104,7 +104,320 @@ const withTimeout = <T>(promise: Promise<T>, ms = 1200): Promise<T> =>
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for cloud auth')), ms))
   ]);
 
-// Helper to execute permanent deletion across Firestore, Auth, and Cloud DB
+// Path for server-side Arkesel SMS configuration (Never exposed to client)
+const SMS_CONFIG_FILE = path.join(process.cwd(), 'sms_config.json');
+
+export interface ArkeselServerConfig {
+  apiKey: string;
+  senderId: string;
+  apiEndpoint: string;
+  isEnabled: boolean;
+  lastTestedAt?: string;
+  lastTestStatus?: string;
+  lastTestMessage?: string;
+  totalSentCount?: number;
+}
+
+// Read SMS configuration securely from server filesystem or environment fallback
+function readSmsConfig(): ArkeselServerConfig {
+  const defaultConfig: ArkeselServerConfig = {
+    apiKey: process.env.ARKESEL_API_KEY || '',
+    senderId: process.env.ARKESEL_SENDER_ID || 'BusinessOS',
+    apiEndpoint: process.env.ARKESEL_SMS_ENDPOINT || 'https://sms.arkesel.com/api/v2/sms/send',
+    isEnabled: true,
+    totalSentCount: 0
+  };
+
+  try {
+    if (fs.existsSync(SMS_CONFIG_FILE)) {
+      const content = fs.readFileSync(SMS_CONFIG_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      return {
+        ...defaultConfig,
+        ...parsed,
+        // If file has empty key, fallback to env
+        apiKey: parsed.apiKey || defaultConfig.apiKey,
+        senderId: parsed.senderId || defaultConfig.senderId,
+        apiEndpoint: parsed.apiEndpoint || defaultConfig.apiEndpoint,
+        isEnabled: parsed.isEnabled !== undefined ? parsed.isEnabled : true
+      };
+    }
+  } catch (err) {
+    console.error('Error reading sms_config.json:', err);
+  }
+  return defaultConfig;
+}
+
+// Save SMS configuration securely to server filesystem
+function writeSmsConfig(config: ArkeselServerConfig): void {
+  try {
+    fs.writeFileSync(SMS_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error writing sms_config.json:', err);
+  }
+}
+
+// Normalize phone numbers (Ghana numbers: 024xxxxxxx -> 23324xxxxxxx; standard international cleaned)
+function normalizePhoneNumber(phone: string): string {
+  if (!phone) return '';
+  let cleaned = String(phone).trim().replace(/[\s\-\(\)\+]/g, '');
+  // Ghana local 10-digit mobile check (e.g. 024xxxxxxx, 055xxxxxxx, 020xxxxxxx, etc.)
+  if (/^0[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned.substring(1);
+  }
+  return cleaned;
+}
+
+// Sliding window cache for SMS deduplication and idempotency (prevents double dispatch and rapid retries)
+const smsDeduplicationCache = new Map<string, { timestamp: number; result: any }>();
+
+// Periodic cleanup of stale deduplication cache entries (older than 2 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of smsDeduplicationCache.entries()) {
+    if (now - entry.timestamp > 120000) {
+      smsDeduplicationCache.delete(key);
+    }
+  }
+}, 60000);
+
+// Helper to log SMS events to database logs
+function logSmsActivity(entry: {
+  businessId: string;
+  recipients: string[];
+  message: string;
+  sender: string;
+  status: string;
+  success: boolean;
+  type?: string;
+  responseDetails?: any;
+}) {
+  try {
+    const dbData = readDatabase();
+    if (!Array.isArray(dbData['bos_notification_logs'])) dbData['bos_notification_logs'] = [];
+    const logRecord = {
+      id: 'sms-log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      businessId: entry.businessId,
+      recipient: entry.recipients.join(', '),
+      message: entry.message,
+      sender: entry.sender,
+      status: entry.status,
+      success: entry.success,
+      type: entry.type || 'sms',
+      timestamp: new Date().toISOString(),
+      details: entry.responseDetails ? JSON.stringify(entry.responseDetails).slice(0, 300) : ''
+    };
+    dbData['bos_notification_logs'].unshift(logRecord);
+    // Keep max 500 logs
+    if (dbData['bos_notification_logs'].length > 500) {
+      dbData['bos_notification_logs'] = dbData['bos_notification_logs'].slice(0, 500);
+    }
+    writeDatabase(dbData);
+  } catch (e) {
+    console.warn('Error recording SMS activity log:', e);
+  }
+}
+
+// Reusable server-side Arkesel SMS dispatch service
+async function dispatchArkeselSms({
+  recipients,
+  message,
+  senderId,
+  idempotencyKey,
+  businessId = 'platform',
+  type = 'transactional'
+}: {
+  recipients: string | string[];
+  message: string;
+  senderId?: string;
+  idempotencyKey?: string;
+  businessId?: string;
+  type?: string;
+}): Promise<{
+  success: boolean;
+  status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error';
+  message: string;
+  recipient: string;
+  details?: any;
+  deduplicated?: boolean;
+}> {
+  const rawList = Array.isArray(recipients) ? recipients : [recipients];
+  const cleanedRecipients = rawList
+    .map(normalizePhoneNumber)
+    .filter(p => p.length >= 9 && /^\d+$/.test(p));
+
+  if (cleanedRecipients.length === 0) {
+    return {
+      success: false,
+      status: 'Invalid phone number',
+      message: 'Please provide a valid recipient phone number (e.g. 0244123456 or 233244123456).',
+      recipient: rawList.join(', ')
+    };
+  }
+
+  const trimmedMessage = (message || '').trim();
+  if (!trimmedMessage) {
+    return {
+      success: false,
+      status: 'Failed',
+      message: 'Message body cannot be empty.',
+      recipient: cleanedRecipients.join(', ')
+    };
+  }
+
+  const config = readSmsConfig();
+
+  if (!config.isEnabled) {
+    return {
+      success: false,
+      status: 'Failed',
+      message: 'Arkesel SMS service is currently disabled by Super Administrator in SMS Settings.',
+      recipient: cleanedRecipients.join(', ')
+    };
+  }
+
+  if (!config.apiKey || config.apiKey.trim() === '') {
+    return {
+      success: false,
+      status: 'Invalid API key',
+      message: 'Arkesel API Key is missing. Please configure your Arkesel API Key in Super Admin → SMS Settings.',
+      recipient: cleanedRecipients.join(', ')
+    };
+  }
+
+  // Idempotency & deduplication check (45s sliding window)
+  const dedupeKey = idempotencyKey || `${businessId}_${cleanedRecipients.sort().join(',')}_${trimmedMessage}`;
+  const cached = smsDeduplicationCache.get(dedupeKey);
+  if (cached && (Date.now() - cached.timestamp < 45000)) {
+    console.log(`[Arkesel SMS Deduplication] Suppressed duplicate SMS dispatch for key ${dedupeKey}`);
+    return {
+      ...cached.result,
+      deduplicated: true,
+      message: 'SMS already dispatched recently (deduplicated).'
+    };
+  }
+
+  const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
+  const effectiveSender = (senderId || config.senderId || 'BusinessOS').slice(0, 11);
+
+  const payload = {
+    sender: effectiveSender,
+    message: trimmedMessage,
+    recipients: cleanedRecipients
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': config.apiKey.trim()
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    const responseText = await response.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = { raw: responseText };
+    }
+
+    const statusCode = response.status;
+    let status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error' = 'Failed';
+    let isSuccess = false;
+
+    // Check Arkesel official response specifications
+    // Arkesel v2 returns { "status": "success", "data": [...], "message": "Successfully Submitted" }
+    // Or code 1000 / "1000"
+    const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+
+    if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('successfully submitted') || lowerMsg.includes('success'))) {
+      isSuccess = true;
+      status = 'Successfully sent';
+      config.totalSentCount = (config.totalSentCount || 0) + cleanedRecipients.length;
+      config.lastTestedAt = new Date().toISOString();
+      config.lastTestStatus = 'Connected / Active';
+      config.lastTestMessage = data?.message || 'Successfully Submitted';
+      writeSmsConfig(config);
+    } else {
+      if (statusCode === 401 || statusCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication') || lowerMsg.includes('invalid key')) {
+        status = 'Invalid API key';
+      } else if (lowerMsg.includes('balance') || lowerMsg.includes('credit') || lowerMsg.includes('insufficient') || lowerMsg.includes('fund') || lowerMsg.includes('units')) {
+        status = 'Insufficient SMS balance';
+      } else if (lowerMsg.includes('recipient') || lowerMsg.includes('phone') || lowerMsg.includes('destination') || lowerMsg.includes('invalid number') || lowerMsg.includes('receiver')) {
+        status = 'Invalid phone number';
+      } else if (statusCode >= 500) {
+        status = 'Gateway/API error';
+      } else {
+        status = 'Failed';
+      }
+
+      config.lastTestedAt = new Date().toISOString();
+      config.lastTestStatus = status;
+      config.lastTestMessage = data?.message || data?.error || responseText.slice(0, 100);
+      writeSmsConfig(config);
+    }
+
+    const finalResult = {
+      success: isSuccess,
+      status,
+      message: data?.message || data?.error || (isSuccess ? 'SMS successfully submitted to Arkesel gateway' : `Arkesel dispatch failed with status: ${status}`),
+      recipient: cleanedRecipients.join(', '),
+      details: data
+    };
+
+    // Store in deduplication cache
+    smsDeduplicationCache.set(dedupeKey, {
+      timestamp: Date.now(),
+      result: finalResult
+    });
+
+    // Record log
+    logSmsActivity({
+      businessId,
+      recipients: cleanedRecipients,
+      message: trimmedMessage,
+      sender: effectiveSender,
+      status,
+      success: isSuccess,
+      type,
+      responseDetails: data
+    });
+
+    return finalResult;
+  } catch (err: any) {
+    const isAbort = err.name === 'AbortError';
+    const status: 'Network error' | 'Gateway/API error' = isAbort ? 'Gateway/API error' : 'Network error';
+    const errorMsg = isAbort ? 'Connection to Arkesel timed out after 12s' : (err.message || 'Network error connecting to Arkesel API');
+
+    logSmsActivity({
+      businessId,
+      recipients: cleanedRecipients,
+      message: trimmedMessage,
+      sender: effectiveSender,
+      status,
+      success: false,
+      type,
+      responseDetails: { error: errorMsg }
+    });
+
+    return {
+      success: false,
+      status,
+      message: errorMsg,
+      recipient: cleanedRecipients.join(', ')
+    };
+  }
+}
+
+// Helper to execute permanent deletion across Cloud DB, Storage, and Firestore/Auth
 async function performPermanentBusinessDeletion(businessId: string, clientIp: string, superAdminInfo?: any) {
   if (!businessId || typeof businessId !== 'string') {
     throw new Error('Invalid or missing businessId parameter');
@@ -124,100 +437,8 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
     if (u && u.email) userEmailsToDelete.add(u.email);
   });
 
-  // 1. Delete Firebase Auth accounts for all users belonging to this business
-  let deletedAuthAccountsCount = 0;
-  if (getApps().length) {
-    try {
-      const authAdmin = getAuth();
-      for (const email of Array.from(userEmailsToDelete)) {
-        try {
-          const userRecord = await withTimeout(authAdmin.getUserByEmail(email), 1000);
-          if (userRecord && userRecord.uid) {
-            await withTimeout(authAdmin.deleteUser(userRecord.uid), 1000);
-            deletedAuthAccountsCount++;
-            console.log(`[Firebase Admin Auth] Deleted user account: ${email} (${userRecord.uid})`);
-          }
-        } catch (authErr: any) {
-          // Non-blocking
-        }
-      }
-    } catch (e) {
-      console.warn('[Firebase Admin Auth deletion note]:', e);
-    }
-  }
-
-  // 2. Delete all related Firestore documents
-  const collectionsToPurge = [
-    'businesses', 'bos_businesses',
-    'users', 'bos_users',
-    'products', 'bos_products',
-    'inventory', 'bos_services',
-    'sales', 'bos_sales',
-    'customers', 'bos_customers',
-    'suppliers', 'bos_suppliers',
-    'employees', 'bos_salon_staff',
-    'transactions', 'bos_payment_transactions',
-    'expenses', 'bos_expenses',
-    'payments', 'subscriptions',
-    'notifications', 'bos_notifications',
-    'settings', 'bos_printer_settings', 'bos_paynow_settings',
-    'reports', 'bos_logs', 'bos_feature_audit_logs',
-    'bos_branches', 'bos_customer_returns', 'bos_supplier_returns',
-    'bos_stock_transfers', 'bos_global_features', 'bos_service_jobs',
-    'bos_menu_items', 'bos_ingredients', 'bos_recipes',
-    'bos_restaurant_tables', 'bos_restaurant_orders', 'bos_reservations',
-    'bos_fast_food_orders', 'bos_fast_food_ingredients', 'bos_fast_food_menu_items',
-    'bos_fast_food_recipes', 'bos_notification_preferences', 'bos_push_device_tokens',
-    'bos_notification_logs', 'bos_salon_appointments', 'bos_laundry_orders', 'bos_laundry_services',
-    'bos_scanner_sessions', 'bos_scanned_items', 'bos_print_commands',
-    'bos_travel_customers', 'bos_travel_bookings', 'bos_travel_flights',
-    'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports',
-    'bos_travel_packages', 'bos_travel_transports', 'bos_travel_insurances',
-    'bos_travel_suppliers', 'bos_travel_partners', 'bos_travel_documents',
-    'bos_travel_marketings',
-    'bos_students', 'bos_teachers', 'bos_classes', 'bos_fee_invoices',
-    'bos_fee_payments', 'bos_attendance', 'bos_exam_grades', 'bos_timetable',
-    'bos_school_announcements'
-  ];
-
-  if (getApps().length) {
-    try {
-      const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
-      const firestoreDb = getFirestore(undefined, dbId);
-
-      await Promise.all(collectionsToPurge.map(async (colName) => {
-        // Direct document deletion
-        try {
-          const directDocRef = firestoreDb.collection(colName).doc(businessId);
-          await withTimeout(directDocRef.delete(), 800);
-        } catch (e) {}
-
-        // Query documents by businessId == businessId
-        try {
-          const snapshot = await withTimeout(firestoreDb.collection(colName).where('businessId', '==', businessId).get(), 1000);
-          if (snapshot && !snapshot.empty) {
-            const batch = firestoreDb.batch();
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await withTimeout(batch.commit(), 1000);
-          }
-        } catch (e) {}
-
-        // Also query documents by schoolId == businessId for school collections
-        try {
-          const snapshot = await withTimeout(firestoreDb.collection(colName).where('schoolId', '==', businessId).get(), 1000);
-          if (snapshot && !snapshot.empty) {
-            const batch = firestoreDb.batch();
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await withTimeout(batch.commit(), 1000);
-          }
-        } catch (e) {}
-      }));
-    } catch (fsErr) {
-      console.warn('[Firebase Admin Firestore deletion note]:', fsErr);
-    }
-  }
-
-  // 3. Delete records matching businessId or id === businessId in cloud_db.json
+  // STEP 1: IMMEDIATE ATOMIC PURGE in cloud_db.json
+  // Remove all matching records across all tables
   let totalPurgedRecords = 0;
   Object.keys(dbData).forEach(key => {
     if (Array.isArray(dbData[key])) {
@@ -225,13 +446,19 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
       if (key === 'bos_businesses' || key === 'businesses') {
         dbData[key] = dbData[key].filter((b: any) => b && b.id !== businessId);
       } else {
-        dbData[key] = dbData[key].filter((item: any) => item && item.businessId !== businessId && item.schoolId !== businessId && item.id !== businessId);
+        dbData[key] = dbData[key].filter((item: any) => 
+          item && 
+          item.businessId !== businessId && 
+          item.schoolId !== businessId && 
+          item.business_id !== businessId && 
+          item.id !== businessId
+        );
       }
       totalPurgedRecords += (initialCount - dbData[key].length);
     }
   });
 
-  // Track deleted business IDs
+  // Record permanent tombstone in bos_deleted_business_ids
   if (!Array.isArray(dbData['bos_deleted_business_ids'])) {
     dbData['bos_deleted_business_ids'] = [];
   }
@@ -265,7 +492,7 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
     timestamp: new Date().toISOString(),
     ipAddress: clientIp,
     status: 'Success',
-    details: `Super Admin permanently deleted business "${busName}" (ID: ${businessId}), purged ${totalPurgedRecords} database records, and deleted ${deletedAuthAccountsCount} Firebase Auth accounts.`
+    details: `Super Admin permanently deleted business "${busName}" (ID: ${businessId}), purged ${totalPurgedRecords} database records immediately.`
   };
 
   if (!Array.isArray(dbData['bos_feature_audit_logs'])) dbData['bos_feature_audit_logs'] = [];
@@ -273,8 +500,70 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
   if (!Array.isArray(dbData['bos_logs'])) dbData['bos_logs'] = [];
   dbData['bos_logs'].unshift(auditLogEntry);
 
+  // Commit changes to local cloud_db.json FIRST
   writeDatabase(dbData);
-  console.log(`[Super Admin] Permanently purged all data for business ID: ${businessId} (${totalPurgedRecords} records removed)`);
+  console.log(`[Super Admin] Atomically purged business ID: ${businessId} (${totalPurgedRecords} records removed) from cloud_db.json`);
+
+  // STEP 2: Non-blocking asynchronous cleanup of Firebase Auth accounts and Firestore documents
+  let deletedAuthAccountsCount = 0;
+  if (getApps().length) {
+    // Run asynchronously in background without blocking response
+    (async () => {
+      try {
+        const authAdmin = getAuth();
+        for (const email of Array.from(userEmailsToDelete)) {
+          try {
+            const userRecord = await withTimeout(authAdmin.getUserByEmail(email), 800);
+            if (userRecord && userRecord.uid) {
+              await withTimeout(authAdmin.deleteUser(userRecord.uid), 800);
+              deletedAuthAccountsCount++;
+              console.log(`[Firebase Admin Auth] Deleted user account: ${email}`);
+            }
+          } catch (authErr: any) {}
+        }
+      } catch (e) {}
+
+      // Purge Firestore collections
+      try {
+        const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
+        const firestoreDb = getFirestore(undefined, dbId);
+        const collectionsToPurge = [
+          'businesses', 'bos_businesses', 'users', 'bos_users', 'products', 'bos_products',
+          'inventory', 'bos_services', 'sales', 'bos_sales', 'customers', 'bos_customers',
+          'suppliers', 'bos_suppliers', 'employees', 'bos_salon_staff', 'transactions',
+          'bos_payment_transactions', 'expenses', 'bos_expenses', 'payments', 'subscriptions',
+          'notifications', 'bos_notifications', 'settings', 'bos_printer_settings', 'bos_paynow_settings',
+          'reports', 'bos_logs', 'bos_feature_audit_logs', 'bos_branches', 'bos_customer_returns',
+          'bos_supplier_returns', 'bos_stock_transfers', 'bos_global_features', 'bos_service_jobs',
+          'bos_menu_items', 'bos_ingredients', 'bos_recipes', 'bos_restaurant_tables',
+          'bos_restaurant_orders', 'bos_reservations', 'bos_fast_food_orders', 'bos_fast_food_ingredients',
+          'bos_fast_food_menu_items', 'bos_fast_food_recipes', 'bos_notification_preferences',
+          'bos_push_device_tokens', 'bos_notification_logs', 'bos_salon_appointments',
+          'bos_laundry_orders', 'bos_laundry_services', 'bos_scanner_sessions', 'bos_scanned_items',
+          'bos_print_commands', 'bos_travel_customers', 'bos_travel_bookings', 'bos_travel_flights',
+          'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports', 'bos_travel_packages',
+          'bos_travel_transports', 'bos_travel_insurances', 'bos_travel_suppliers', 'bos_travel_partners',
+          'bos_travel_documents', 'bos_travel_marketings', 'bos_students', 'bos_teachers',
+          'bos_classes', 'bos_fee_invoices', 'bos_fee_payments', 'bos_attendance',
+          'bos_exam_grades', 'bos_timetable', 'bos_school_announcements'
+        ];
+
+        for (const colName of collectionsToPurge) {
+          try {
+            await withTimeout(firestoreDb.collection(colName).doc(businessId).delete(), 400);
+          } catch (e) {}
+          try {
+            const snap = await withTimeout(firestoreDb.collection(colName).where('businessId', '==', businessId).limit(50).get(), 500);
+            if (snap && !snap.empty) {
+              const batch = firestoreDb.batch();
+              snap.docs.forEach(d => batch.delete(d.ref));
+              await withTimeout(batch.commit(), 500);
+            }
+          } catch (e) {}
+        }
+      } catch (fsErr) {}
+    })().catch(err => console.warn('Background cleanup note:', err));
+  }
 
   return {
     success: true,
@@ -284,6 +573,7 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
     message: "Business permanently deleted"
   };
 }
+
 
 // API 3.5: Secure Backend Delete Endpoint required by Business Tenant Management
 app.delete('/api/admin/business/:businessId', async (req, res) => {
@@ -323,6 +613,175 @@ app.post('/api/db/delete-business', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message || 'Server error while deleting business' });
   }
 });
+
+// =========================================================================
+// CENTRAL ARKESEL SMS GATEWAY API ENDPOINTS (SUPER ADMIN & PLATFORM-WIDE)
+// =========================================================================
+
+// API 3.6: Get Arkesel SMS Configuration (API Key is masked for security)
+app.get('/api/admin/sms-config', (req, res) => {
+  try {
+    const config = readSmsConfig();
+    const hasKey = Boolean(config.apiKey && config.apiKey.trim().length > 0);
+    const maskedKey = hasKey
+      ? (config.apiKey.length > 8 ? `${config.apiKey.slice(0, 4)}••••••••${config.apiKey.slice(-4)}` : '••••••••••••')
+      : '';
+
+    return res.json({
+      success: true,
+      provider: 'Arkesel',
+      senderId: config.senderId || 'BusinessOS',
+      apiEndpoint: config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+      isEnabled: config.isEnabled,
+      hasApiKey: hasKey,
+      maskedApiKey: maskedKey,
+      lastTestedAt: config.lastTestedAt || null,
+      lastTestStatus: config.lastTestStatus || (hasKey ? 'Configured' : 'Not Connected'),
+      lastTestMessage: config.lastTestMessage || null,
+      totalSentCount: config.totalSentCount || 0
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/admin/sms-config:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve SMS configuration' });
+  }
+});
+
+// API 3.7: Update Central Arkesel SMS Settings
+app.post('/api/admin/sms-config', (req, res) => {
+  try {
+    const { apiKey, senderId, apiEndpoint, isEnabled } = req.body;
+    const current = readSmsConfig();
+
+    const updated: ArkeselServerConfig = {
+      ...current,
+      senderId: (senderId !== undefined && String(senderId).trim()) ? String(senderId).trim().slice(0, 11) : current.senderId,
+      apiEndpoint: (apiEndpoint !== undefined && String(apiEndpoint).trim()) ? String(apiEndpoint).trim() : current.apiEndpoint,
+      isEnabled: isEnabled !== undefined ? Boolean(isEnabled) : current.isEnabled
+    };
+
+    // Only update API key if provided and not masked
+    if (apiKey && typeof apiKey === 'string') {
+      const trimmedKey = apiKey.trim();
+      if (!trimmedKey.includes('••••')) {
+        updated.apiKey = trimmedKey;
+      }
+    }
+
+    writeSmsConfig(updated);
+    console.log('[Super Admin SMS] Updated central Arkesel SMS gateway configuration');
+
+    const hasKey = Boolean(updated.apiKey && updated.apiKey.length > 0);
+    const maskedKey = hasKey
+      ? (updated.apiKey.length > 8 ? `${updated.apiKey.slice(0, 4)}••••••••${updated.apiKey.slice(-4)}` : '••••••••••••')
+      : '';
+
+    return res.json({
+      success: true,
+      message: 'Arkesel SMS configuration saved successfully.',
+      config: {
+        provider: 'Arkesel',
+        senderId: updated.senderId,
+        apiEndpoint: updated.apiEndpoint,
+        isEnabled: updated.isEnabled,
+        hasApiKey: hasKey,
+        maskedApiKey: maskedKey,
+        lastTestedAt: updated.lastTestedAt || null,
+        lastTestStatus: updated.lastTestStatus || 'Saved'
+      }
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/sms-config:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to update SMS configuration' });
+  }
+});
+
+// API 3.8: Send Test SMS via real Arkesel API
+app.post('/api/admin/sms/test', async (req, res) => {
+  try {
+    const { phoneNumber, message } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        status: 'Invalid phone number',
+        message: 'Please provide a recipient phone number for the test SMS.'
+      });
+    }
+
+    const testMessage = (message && String(message).trim())
+      ? String(message).trim()
+      : `BusinessOS Arkesel Gateway Test at ${new Date().toLocaleTimeString()}. If you received this, SMS is active and working!`;
+
+    const result = await dispatchArkeselSms({
+      recipients: [phoneNumber],
+      message: testMessage,
+      businessId: 'platform',
+      type: 'test_sms'
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/sms/test:', err);
+    return res.status(500).json({
+      success: false,
+      status: 'Network error',
+      message: err.message || 'An unexpected error occurred while executing the Arkesel test SMS'
+    });
+  }
+});
+
+// API 3.9: Universal Platform SMS Dispatch (used by POS, Invoices, Receipts, School announcements, Appointments, etc.)
+app.post('/api/sms/send', async (req, res) => {
+  try {
+    const { recipient, message, senderId, idempotencyKey, businessId, type } = req.body;
+
+    if (!recipient) {
+      return res.status(400).json({
+        success: false,
+        status: 'Invalid phone number',
+        message: 'Recipient is required'
+      });
+    }
+
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        status: 'Failed',
+        message: 'SMS message body cannot be empty'
+      });
+    }
+
+    const result = await dispatchArkeselSms({
+      recipients: Array.isArray(recipient) ? recipient : [recipient],
+      message,
+      senderId,
+      idempotencyKey,
+      businessId,
+      type: type || 'transactional'
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error in POST /api/sms/send:', err);
+    return res.status(500).json({
+      success: false,
+      status: 'Network error',
+      message: err.message || 'Failed to dispatch SMS'
+    });
+  }
+});
+
+// API 3.10: SMS Delivery & Audit Logs
+app.get('/api/admin/sms/logs', (req, res) => {
+  try {
+    const dbData = readDatabase();
+    const logs = (dbData['bos_notification_logs'] || []).filter((l: any) => l && (l.type === 'sms' || l.type === 'test_sms' || l.type === 'transactional'));
+    return res.json({ success: true, logs: logs.slice(0, 100) });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve logs' });
+  }
+});
+
 
 // API 4: Cloud Base64 File Uploader
 app.post('/api/upload', (req, res) => {

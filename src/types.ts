@@ -1131,12 +1131,20 @@ export interface SchoolAnnouncement {
 export interface SmsSettings {
   id?: string;
   businessId?: string; // 'platform' or specific business
-  provider: 'hubtel' | 'arkesel' | 'mnotify' | 'twilio';
+  provider: 'hubtel' | 'arkesel' | 'mnotify' | 'twilio' | string;
   apiKey: string;
   apiSecret?: string;
   senderId: string;
+  apiEndpoint?: string;
+  isEnabled?: boolean;
+  hasApiKey?: boolean;
+  maskedApiKey?: string;
+  lastTestedAt?: string | null;
+  lastTestStatus?: string;
+  lastTestMessage?: string | null;
+  totalSentCount?: number;
   balance?: number;
-  isActive: boolean;
+  isActive?: boolean;
   updatedAt?: string;
   updatedBy?: string;
 }
