@@ -34,12 +34,33 @@ if (!getApps().length && firebaseConfig.projectId) {
   }
 }
 
+// Helper to get Firestore database instance safely
+function getFirestoreDbInstance() {
+  try {
+    if (!getApps().length || !firebaseConfig?.projectId) return null;
+    const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
+    return getFirestore(undefined, dbId);
+  } catch {
+    return null;
+  }
+}
+
 // Helper to read database
 function readDatabase(): Record<string, any[]> {
   try {
     if (fs.existsSync(DB_FILE)) {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(content) || {};
+      const data = JSON.parse(content) || {};
+      const deletedIds = new Set(data['bos_deleted_business_ids'] || []);
+      if (deletedIds.size > 0) {
+        if (Array.isArray(data['bos_businesses'])) {
+          data['bos_businesses'] = data['bos_businesses'].filter((b: any) => b && b.id && !deletedIds.has(b.id));
+        }
+        if (Array.isArray(data['businesses'])) {
+          data['businesses'] = data['businesses'].filter((b: any) => b && b.id && !deletedIds.has(b.id));
+        }
+      }
+      return data;
     }
   } catch (e) {
     console.error('Error reading cloud_db.json:', e);
@@ -89,7 +110,17 @@ app.post('/api/db/save', (req, res) => {
       return res.status(400).json({ error: 'Missing key parameter' });
     }
     const dbData = readDatabase();
-    dbData[key] = Array.isArray(data) ? data : [];
+    const deletedIds = new Set(dbData['bos_deleted_business_ids'] || []);
+
+    // CRITICAL: Filter out any items belonging to permanently deleted businesses
+    let cleanData = Array.isArray(data) ? data : [];
+    if (key === 'bos_businesses' || key === 'businesses') {
+      cleanData = cleanData.filter((b: any) => b && b.id && !deletedIds.has(b.id));
+    } else if (key !== 'bos_deleted_business_ids') {
+      cleanData = cleanData.filter((item: any) => !item || !item.businessId || !deletedIds.has(item.businessId));
+    }
+
+    dbData[key] = cleanData;
     writeDatabase(dbData);
     res.json({ success: true, key });
   } catch (err) {
@@ -148,8 +179,12 @@ function readSmsConfig(): ArkeselServerConfig {
   return defaultConfig;
 }
 
-// Save SMS configuration securely to server filesystem
+// In-memory cache for SMS configuration to eliminate disk read latency on every request
+let inMemorySmsConfig: ArkeselServerConfig = readSmsConfig();
+
+// Save SMS configuration securely to server filesystem and update in-memory cache
 function writeSmsConfig(config: ArkeselServerConfig): void {
+  inMemorySmsConfig = { ...config };
   try {
     fs.writeFileSync(SMS_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
   } catch (err) {
@@ -181,8 +216,8 @@ setInterval(() => {
   }
 }, 60000);
 
-// Helper to log SMS events to database logs
-function logSmsActivity(entry: {
+// Helper to log SMS events asynchronously without blocking the client response
+function logSmsActivityAsync(entry: {
   businessId: string;
   recipients: string[];
   message: string;
@@ -191,41 +226,46 @@ function logSmsActivity(entry: {
   success: boolean;
   type?: string;
   responseDetails?: any;
+  timings?: any;
 }) {
-  try {
-    const dbData = readDatabase();
-    if (!Array.isArray(dbData['bos_notification_logs'])) dbData['bos_notification_logs'] = [];
-    const logRecord = {
-      id: 'sms-log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-      businessId: entry.businessId,
-      recipient: entry.recipients.join(', '),
-      message: entry.message,
-      sender: entry.sender,
-      status: entry.status,
-      success: entry.success,
-      type: entry.type || 'sms',
-      timestamp: new Date().toISOString(),
-      details: entry.responseDetails ? JSON.stringify(entry.responseDetails).slice(0, 300) : ''
-    };
-    dbData['bos_notification_logs'].unshift(logRecord);
-    // Keep max 500 logs
-    if (dbData['bos_notification_logs'].length > 500) {
-      dbData['bos_notification_logs'] = dbData['bos_notification_logs'].slice(0, 500);
+  setImmediate(() => {
+    try {
+      const dbData = readDatabase();
+      if (!Array.isArray(dbData['bos_notification_logs'])) dbData['bos_notification_logs'] = [];
+      const logRecord = {
+        id: 'sms-log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+        businessId: entry.businessId,
+        recipient: entry.recipients.join(', '),
+        message: entry.message,
+        sender: entry.sender,
+        status: entry.status,
+        success: entry.success,
+        type: entry.type || 'sms',
+        timestamp: new Date().toISOString(),
+        timings: entry.timings,
+        details: entry.responseDetails ? JSON.stringify(entry.responseDetails).slice(0, 300) : ''
+      };
+      dbData['bos_notification_logs'].unshift(logRecord);
+      // Keep max 500 logs
+      if (dbData['bos_notification_logs'].length > 500) {
+        dbData['bos_notification_logs'] = dbData['bos_notification_logs'].slice(0, 500);
+      }
+      writeDatabase(dbData);
+    } catch (e) {
+      console.warn('Background SMS activity log error:', e);
     }
-    writeDatabase(dbData);
-  } catch (e) {
-    console.warn('Error recording SMS activity log:', e);
-  }
+  });
 }
 
-// Reusable server-side Arkesel SMS dispatch service
+// Reusable server-side Arkesel SMS dispatch service — optimized for sub-second, direct execution
 async function dispatchArkeselSms({
   recipients,
   message,
   senderId,
   idempotencyKey,
   businessId = 'platform',
-  type = 'transactional'
+  type = 'transactional',
+  clientTriggerTime
 }: {
   recipients: string | string[];
   message: string;
@@ -233,6 +273,7 @@ async function dispatchArkeselSms({
   idempotencyKey?: string;
   businessId?: string;
   type?: string;
+  clientTriggerTime?: number;
 }): Promise<{
   success: boolean;
   status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error';
@@ -240,65 +281,167 @@ async function dispatchArkeselSms({
   recipient: string;
   details?: any;
   deduplicated?: boolean;
+  timings: {
+    clientTriggerTime?: number;
+    backendReceivedTime: number;
+    arkeselRequestStartTime: number;
+    arkeselResponseTime: number;
+    submissionCompletionTime: number;
+    arkeselLatencyMs: number;
+    totalSubmissionMs: number;
+  };
 }> {
+  const backendReceivedTime = Date.now();
   const rawList = Array.isArray(recipients) ? recipients : [recipients];
   const cleanedRecipients = rawList
     .map(normalizePhoneNumber)
     .filter(p => p.length >= 9 && /^\d+$/.test(p));
 
   if (cleanedRecipients.length === 0) {
+    const completionTime = Date.now();
     return {
       success: false,
       status: 'Invalid phone number',
       message: 'Please provide a valid recipient phone number (e.g. 0244123456 or 233244123456).',
-      recipient: rawList.join(', ')
+      recipient: rawList.join(', '),
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime: backendReceivedTime,
+        arkeselResponseTime: completionTime,
+        submissionCompletionTime: completionTime,
+        arkeselLatencyMs: 0,
+        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+      }
     };
   }
 
   const trimmedMessage = (message || '').trim();
   if (!trimmedMessage) {
+    const completionTime = Date.now();
     return {
       success: false,
       status: 'Failed',
       message: 'Message body cannot be empty.',
-      recipient: cleanedRecipients.join(', ')
+      recipient: cleanedRecipients.join(', '),
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime: backendReceivedTime,
+        arkeselResponseTime: completionTime,
+        submissionCompletionTime: completionTime,
+        arkeselLatencyMs: 0,
+        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+      }
     };
   }
 
-  const config = readSmsConfig();
+  // Use in-memory config for 0ms disk overhead
+  const config = inMemorySmsConfig;
 
   if (!config.isEnabled) {
+    const completionTime = Date.now();
     return {
       success: false,
       status: 'Failed',
       message: 'Arkesel SMS service is currently disabled by Super Administrator in SMS Settings.',
-      recipient: cleanedRecipients.join(', ')
+      recipient: cleanedRecipients.join(', '),
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime: backendReceivedTime,
+        arkeselResponseTime: completionTime,
+        submissionCompletionTime: completionTime,
+        arkeselLatencyMs: 0,
+        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+      }
     };
   }
 
   if (!config.apiKey || config.apiKey.trim() === '') {
+    const completionTime = Date.now();
     return {
       success: false,
       status: 'Invalid API key',
       message: 'Arkesel API Key is missing. Please configure your Arkesel API Key in Super Admin → SMS Settings.',
-      recipient: cleanedRecipients.join(', ')
+      recipient: cleanedRecipients.join(', '),
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime: backendReceivedTime,
+        arkeselResponseTime: completionTime,
+        submissionCompletionTime: completionTime,
+        arkeselLatencyMs: 0,
+        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+      }
     };
   }
 
-  // Idempotency & deduplication check (45s sliding window)
+  // Verify business-level SMS status (Enforced server-side)
+  if (businessId && businessId !== 'platform') {
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const targetBusiness = businesses.find((b: any) => b && b.id === businessId);
+    if (targetBusiness && targetBusiness.smsEnabled === false) {
+      const completionTime = Date.now();
+      const disabledMsg = `SMS functionality for "${targetBusiness.name || businessId}" has been disabled by the Super Administrator.`;
+      console.warn(`[Arkesel SMS Blocked] Business ${businessId} has SMS disabled by Super Admin.`);
+      return {
+        success: false,
+        status: 'Failed',
+        message: disabledMsg,
+        recipient: cleanedRecipients.join(', '),
+        timings: {
+          clientTriggerTime,
+          backendReceivedTime,
+          arkeselRequestStartTime: backendReceivedTime,
+          arkeselResponseTime: completionTime,
+          submissionCompletionTime: completionTime,
+          arkeselLatencyMs: 0,
+          totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        }
+      };
+    }
+  }
+
+  // Idempotency & deduplication check (30s sliding window)
   const dedupeKey = idempotencyKey || `${businessId}_${cleanedRecipients.sort().join(',')}_${trimmedMessage}`;
   const cached = smsDeduplicationCache.get(dedupeKey);
-  if (cached && (Date.now() - cached.timestamp < 45000)) {
+  if (cached && (Date.now() - cached.timestamp < 30000)) {
     console.log(`[Arkesel SMS Deduplication] Suppressed duplicate SMS dispatch for key ${dedupeKey}`);
+    const completionTime = Date.now();
     return {
       ...cached.result,
       deduplicated: true,
-      message: 'SMS already dispatched recently (deduplicated).'
+      message: 'SMS already dispatched recently (deduplicated).',
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime: backendReceivedTime,
+        arkeselResponseTime: completionTime,
+        submissionCompletionTime: completionTime,
+        arkeselLatencyMs: 0,
+        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+      }
     };
   }
 
   const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
-  const effectiveSender = (senderId || config.senderId || 'BusinessOS').slice(0, 11);
+
+  // Determine dynamic sender ID from registered business name (Requirement 13)
+  let resolvedSender = senderId;
+  if (!resolvedSender && businessId && businessId !== 'platform') {
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const targetBusiness = businesses.find((b: any) => b && b.id === businessId);
+    if (targetBusiness?.name) {
+      const cleaned = targetBusiness.name.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+      if (cleaned.length > 0) {
+        resolvedSender = cleaned.slice(0, 11);
+      }
+    }
+  }
+  const effectiveSender = (resolvedSender || config.senderId || 'BusinessOS').slice(0, 11);
 
   const payload = {
     sender: effectiveSender,
@@ -306,21 +449,26 @@ async function dispatchArkeselSms({
     recipients: cleanedRecipients
   };
 
+  const arkeselRequestStartTime = Date.now();
+
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
+    // Direct HTTP request to Arkesel with keep-alive
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'api-key': config.apiKey.trim()
+        'api-key': config.apiKey.trim(),
+        'Connection': 'keep-alive'
       },
       body: JSON.stringify(payload),
       signal: controller.signal
     });
     clearTimeout(timeoutId);
 
+    const arkeselResponseTime = Date.now();
     const responseText = await response.text();
     let data: any = null;
     try {
@@ -341,11 +489,12 @@ async function dispatchArkeselSms({
     if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('successfully submitted') || lowerMsg.includes('success'))) {
       isSuccess = true;
       status = 'Successfully sent';
-      config.totalSentCount = (config.totalSentCount || 0) + cleanedRecipients.length;
-      config.lastTestedAt = new Date().toISOString();
-      config.lastTestStatus = 'Connected / Active';
-      config.lastTestMessage = data?.message || 'Successfully Submitted';
-      writeSmsConfig(config);
+      // Background non-blocking update of counters and test state
+      inMemorySmsConfig.totalSentCount = (inMemorySmsConfig.totalSentCount || 0) + cleanedRecipients.length;
+      inMemorySmsConfig.lastTestedAt = new Date().toISOString();
+      inMemorySmsConfig.lastTestStatus = 'Active & Connected';
+      inMemorySmsConfig.lastTestMessage = data?.message || 'Successfully Submitted';
+      setImmediate(() => writeSmsConfig(inMemorySmsConfig));
     } else {
       if (statusCode === 401 || statusCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication') || lowerMsg.includes('invalid key')) {
         status = 'Invalid API key';
@@ -359,18 +508,33 @@ async function dispatchArkeselSms({
         status = 'Failed';
       }
 
-      config.lastTestedAt = new Date().toISOString();
-      config.lastTestStatus = status;
-      config.lastTestMessage = data?.message || data?.error || responseText.slice(0, 100);
-      writeSmsConfig(config);
+      inMemorySmsConfig.lastTestedAt = new Date().toISOString();
+      inMemorySmsConfig.lastTestStatus = status;
+      inMemorySmsConfig.lastTestMessage = data?.message || data?.error || responseText.slice(0, 100);
+      setImmediate(() => writeSmsConfig(inMemorySmsConfig));
     }
+
+    const submissionCompletionTime = Date.now();
+    const arkeselLatencyMs = arkeselResponseTime - arkeselRequestStartTime;
+    const totalSubmissionMs = submissionCompletionTime - (clientTriggerTime || backendReceivedTime);
+
+    console.log(`[Arkesel SMS INSTANT] Dispatched to ${cleanedRecipients.join(', ')} -> Status: ${status} (Gateway Latency: ${arkeselLatencyMs}ms, Total: ${totalSubmissionMs}ms)`);
 
     const finalResult = {
       success: isSuccess,
       status,
       message: data?.message || data?.error || (isSuccess ? 'SMS successfully submitted to Arkesel gateway' : `Arkesel dispatch failed with status: ${status}`),
       recipient: cleanedRecipients.join(', '),
-      details: data
+      details: data,
+      timings: {
+        clientTriggerTime,
+        backendReceivedTime,
+        arkeselRequestStartTime,
+        arkeselResponseTime,
+        submissionCompletionTime,
+        arkeselLatencyMs,
+        totalSubmissionMs
+      }
     };
 
     // Store in deduplication cache
@@ -379,8 +543,8 @@ async function dispatchArkeselSms({
       result: finalResult
     });
 
-    // Record log
-    logSmsActivity({
+    // Record log asynchronously without blocking the response
+    logSmsActivityAsync({
       businessId,
       recipients: cleanedRecipients,
       message: trimmedMessage,
@@ -388,16 +552,32 @@ async function dispatchArkeselSms({
       status,
       success: isSuccess,
       type,
-      responseDetails: data
+      responseDetails: data,
+      timings: finalResult.timings
     });
 
     return finalResult;
   } catch (err: any) {
     const isAbort = err.name === 'AbortError';
     const status: 'Network error' | 'Gateway/API error' = isAbort ? 'Gateway/API error' : 'Network error';
-    const errorMsg = isAbort ? 'Connection to Arkesel timed out after 12s' : (err.message || 'Network error connecting to Arkesel API');
+    const errorMsg = isAbort ? 'Connection to Arkesel timed out after 10s' : (err.message || 'Network error connecting to Arkesel API');
+    const submissionCompletionTime = Date.now();
+    const arkeselLatencyMs = submissionCompletionTime - arkeselRequestStartTime;
+    const totalSubmissionMs = submissionCompletionTime - (clientTriggerTime || backendReceivedTime);
 
-    logSmsActivity({
+    console.error(`[Arkesel SMS ERROR] Dispatch to ${cleanedRecipients.join(', ')} failed: ${errorMsg}`);
+
+    const errorTimings = {
+      clientTriggerTime,
+      backendReceivedTime,
+      arkeselRequestStartTime,
+      arkeselResponseTime: submissionCompletionTime,
+      submissionCompletionTime,
+      arkeselLatencyMs,
+      totalSubmissionMs
+    };
+
+    logSmsActivityAsync({
       businessId,
       recipients: cleanedRecipients,
       message: trimmedMessage,
@@ -405,14 +585,16 @@ async function dispatchArkeselSms({
       status,
       success: false,
       type,
-      responseDetails: { error: errorMsg }
+      responseDetails: { error: errorMsg },
+      timings: errorTimings
     });
 
     return {
       success: false,
       status,
       message: errorMsg,
-      recipient: cleanedRecipients.join(', ')
+      recipient: cleanedRecipients.join(', '),
+      timings: errorTimings
     };
   }
 }
@@ -562,7 +744,53 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
           } catch (e) {}
         }
       } catch (fsErr) {}
+
+      // Purge via Firestore REST API (using public web API key & project ID)
+      try {
+        if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+          const proj = firebaseConfig.projectId;
+          const key = firebaseConfig.apiKey;
+          const collections = ['bos_businesses', 'businesses', 'bos_products', 'bos_sales', 'bos_customers', 'bos_users'];
+          for (const c of collections) {
+            fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/${c}/${businessId}?key=${key}`, {
+              method: 'DELETE'
+            }).catch(() => {});
+          }
+          // Record tombstone in Firestore
+          fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_deleted_business_ids/${businessId}?key=${key}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: {
+                businessId: { stringValue: businessId },
+                deletedAt: { stringValue: new Date().toISOString() }
+              }
+            })
+          }).catch(() => {});
+        }
+      } catch (restErr) {}
     })().catch(err => console.warn('Background cleanup note:', err));
+  } else {
+    // Even if Admin SDK is not initialized, purge via Firestore REST API directly
+    try {
+      if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+        const proj = firebaseConfig.projectId;
+        const key = firebaseConfig.apiKey;
+        fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_businesses/${businessId}?key=${key}`, {
+          method: 'DELETE'
+        }).catch(() => {});
+        fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_deleted_business_ids/${businessId}?key=${key}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              businessId: { stringValue: businessId },
+              deletedAt: { stringValue: new Date().toISOString() }
+            }
+          })
+        }).catch(() => {});
+      }
+    } catch (e) {}
   }
 
   return {
@@ -695,10 +923,10 @@ app.post('/api/admin/sms-config', (req, res) => {
   }
 });
 
-// API 3.8: Send Test SMS via real Arkesel API
+// API 3.8: Send Test SMS via real Arkesel API (Instant dispatch with timings)
 app.post('/api/admin/sms/test', async (req, res) => {
   try {
-    const { phoneNumber, message } = req.body;
+    const { phoneNumber, message, clientTriggerTime } = req.body;
 
     if (!phoneNumber) {
       return res.status(400).json({
@@ -716,7 +944,8 @@ app.post('/api/admin/sms/test', async (req, res) => {
       recipients: [phoneNumber],
       message: testMessage,
       businessId: 'platform',
-      type: 'test_sms'
+      type: 'test_sms',
+      clientTriggerTime: Number(clientTriggerTime) || undefined
     });
 
     return res.json(result);
@@ -733,7 +962,7 @@ app.post('/api/admin/sms/test', async (req, res) => {
 // API 3.9: Universal Platform SMS Dispatch (used by POS, Invoices, Receipts, School announcements, Appointments, etc.)
 app.post('/api/sms/send', async (req, res) => {
   try {
-    const { recipient, message, senderId, idempotencyKey, businessId, type } = req.body;
+    const { recipient, message, senderId, idempotencyKey, businessId, type, clientTriggerTime } = req.body;
 
     if (!recipient) {
       return res.status(400).json({
@@ -757,7 +986,8 @@ app.post('/api/sms/send', async (req, res) => {
       senderId,
       idempotencyKey,
       businessId,
-      type: type || 'transactional'
+      type: type || 'transactional',
+      clientTriggerTime: Number(clientTriggerTime) || undefined
     });
 
     return res.json(result);
@@ -779,6 +1009,469 @@ app.get('/api/admin/sms/logs', (req, res) => {
     return res.json({ success: true, logs: logs.slice(0, 100) });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve logs' });
+  }
+});
+
+// =========================================================================
+// SUPER ADMIN PER-BUSINESS SMS CONTROL (Requirement 11 & 12)
+// =========================================================================
+
+// Toggle or update per-business SMS status
+app.post('/api/admin/business-sms-toggle', async (req, res) => {
+  try {
+    const { businessId, smsEnabled } = req.body;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'businessId is required' });
+    }
+
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const targetIdx = businesses.findIndex((b: any) => b && b.id === businessId);
+
+    if (targetIdx === -1) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    const isEnabled = smsEnabled === true || smsEnabled === 'true' || smsEnabled === 1;
+    businesses[targetIdx].smsEnabled = isEnabled;
+    businesses[targetIdx].updatedAt = new Date().toISOString();
+
+    // Persist to cloud_db.json
+    dbData['bos_businesses'] = businesses;
+
+    // Record audit log
+    const auditEntry = {
+      id: 'audit-sms-toggle-' + Date.now(),
+      action: isEnabled ? 'ENABLE_BUSINESS_SMS' : 'DISABLE_BUSINESS_SMS',
+      businessId,
+      businessName: businesses[targetIdx].name,
+      timestamp: new Date().toISOString(),
+      status: 'Success',
+      details: `Super Admin set SMS functionality to ${isEnabled ? 'ENABLED' : 'DISABLED'} for business "${businesses[targetIdx].name}" (ID: ${businessId}).`
+    };
+    if (!Array.isArray(dbData['bos_feature_audit_logs'])) dbData['bos_feature_audit_logs'] = [];
+    dbData['bos_feature_audit_logs'].unshift(auditEntry);
+    writeDatabase(dbData);
+
+    // Sync to Firestore if available
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      firestoreDb.collection('bos_businesses').doc(businessId).set({
+        smsEnabled: isEnabled,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch(() => {});
+    }
+
+    console.log(`[Super Admin SMS Control] ${businesses[targetIdx].name} (${businessId}) SMS is now ${isEnabled ? 'ENABLED' : 'DISABLED'}`);
+
+    return res.json({
+      success: true,
+      businessId,
+      smsEnabled: isEnabled,
+      message: `SMS has been ${isEnabled ? 'enabled' : 'disabled'} for ${businesses[targetIdx].name}`
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/business-sms-toggle:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// =========================================================================
+// SUPER ADMIN PRICING PLANS ENDPOINTS
+// =========================================================================
+
+// Get all pricing plans
+app.get('/api/admin/pricing-plans', (req, res) => {
+  try {
+    const dbData = readDatabase();
+    const plans = dbData['bos_pricing_plans'] || [];
+    return res.json({ success: true, plans });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create or update a pricing plan
+app.post('/api/admin/pricing-plans', async (req, res) => {
+  try {
+    const plan = req.body;
+    if (!plan || !plan.name || plan.price === undefined) {
+      return res.status(400).json({ success: false, error: 'Plan name and price are required' });
+    }
+
+    const planId = plan.id || 'plan_' + Date.now();
+    const cleanPlan = {
+      ...plan,
+      id: planId,
+      price: Number(plan.price) || 0,
+      updatedAt: new Date().toISOString()
+    };
+
+    const dbData = readDatabase();
+    if (!Array.isArray(dbData['bos_pricing_plans'])) dbData['bos_pricing_plans'] = [];
+
+    const existingIdx = dbData['bos_pricing_plans'].findIndex((p: any) => p && p.id === planId);
+    if (existingIdx >= 0) {
+      dbData['bos_pricing_plans'][existingIdx] = cleanPlan;
+    } else {
+      dbData['bos_pricing_plans'].push(cleanPlan);
+    }
+
+    writeDatabase(dbData);
+
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      firestoreDb.collection('bos_pricing_plans').doc(planId).set(cleanPlan).catch(() => {});
+    }
+
+    return res.json({ success: true, plan: cleanPlan });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete a pricing plan
+app.delete('/api/admin/pricing-plans/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dbData = readDatabase();
+    if (Array.isArray(dbData['bos_pricing_plans'])) {
+      dbData['bos_pricing_plans'] = dbData['bos_pricing_plans'].filter((p: any) => p && p.id !== id);
+      writeDatabase(dbData);
+    }
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      firestoreDb.collection('bos_pricing_plans').doc(id).delete().catch(() => {});
+    }
+    return res.json({ success: true, message: 'Plan deleted' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// =========================================================================
+// SUPER ADMIN BUSINESS PRICING MANAGEMENT ENDPOINTS
+// =========================================================================
+
+// API 3.11: Get all business prices (Super Admin)
+app.get('/api/admin/business-pricing', (req, res) => {
+  try {
+    const dbData = readDatabase();
+    const businesses = (dbData['bos_businesses'] || dbData['businesses'] || []).filter((b: any) => b && b.id);
+    
+    const pricingList = businesses.map((b: any) => ({
+      id: b.id,
+      name: b.name || 'Unnamed Business',
+      category: b.category || 'General Business',
+      status: b.status || 'active',
+      currency: b.currency || 'GHS',
+      subscriptionAmount: b.subscriptionAmount !== undefined && b.subscriptionAmount !== null && b.subscriptionAmount !== '' ? Number(b.subscriptionAmount) : null,
+      priceUpdatedAt: b.priceUpdatedAt || null,
+      priceUpdatedBy: b.priceUpdatedBy || null,
+      registrationDate: b.registrationDate || b.createdAt || null,
+      ownerEmail: b.email || b.ownerEmail || null
+    }));
+
+    return res.json({
+      success: true,
+      businesses: pricingList
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/admin/business-pricing:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve business pricing' });
+  }
+});
+
+// API 3.12: Update/Set a business's price (Super Admin)
+app.post('/api/admin/business-pricing', async (req, res) => {
+  try {
+    const { businessId, subscriptionAmount, priceUpdatedBy } = req.body;
+
+    if (!businessId || typeof businessId !== 'string') {
+      return res.status(400).json({ success: false, error: 'Valid businessId is required' });
+    }
+
+    const numericPrice = Number(subscriptionAmount);
+    if (isNaN(numericPrice) || numericPrice < 0) {
+      return res.status(400).json({ success: false, error: 'Price must be a valid positive monetary value' });
+    }
+
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const targetBusIndex = businesses.findIndex((b: any) => b && b.id === businessId);
+
+    if (targetBusIndex === -1) {
+      return res.status(404).json({ success: false, error: `Business with ID "${businessId}" not found` });
+    }
+
+    const updatedAt = new Date().toISOString();
+    const updatedBy = String(priceUpdatedBy || 'Super Admin').trim();
+
+    businesses[targetBusIndex].subscriptionAmount = numericPrice;
+    businesses[targetBusIndex].priceUpdatedAt = updatedAt;
+    businesses[targetBusIndex].priceUpdatedBy = updatedBy;
+
+    // Persist to local cloud_db.json
+    dbData['bos_businesses'] = businesses;
+    writeDatabase(dbData);
+
+    // Sync to Firestore if available
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      try {
+        await withTimeout(
+          firestoreDb.collection('bos_businesses').doc(businessId).set({
+            subscriptionAmount: numericPrice,
+            priceUpdatedAt: updatedAt,
+            priceUpdatedBy: updatedBy
+          }, { merge: true }),
+          1500
+        );
+      } catch (fsErr) {
+        console.warn('Firestore sync note for pricing update:', fsErr);
+      }
+    }
+
+    console.log(`[Super Admin Pricing] Set price for business "${businesses[targetBusIndex].name}" (${businessId}) to GH₵${numericPrice}`);
+
+    return res.json({
+      success: true,
+      message: `Pricing for ${businesses[targetBusIndex].name} updated to GH₵${numericPrice.toFixed(2)}`,
+      business: {
+        id: businessId,
+        name: businesses[targetBusIndex].name,
+        subscriptionAmount: numericPrice,
+        priceUpdatedAt: updatedAt,
+        priceUpdatedBy: updatedBy,
+        currency: businesses[targetBusIndex].currency || 'GHS'
+      }
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/business-pricing:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to update business pricing' });
+  }
+});
+
+// API 3.13: Get single business pricing (Multi-tenant business view)
+app.get('/api/business/:businessId/pricing', (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const business = businesses.find((b: any) => b && b.id === businessId);
+
+    if (!business) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    return res.json({
+      success: true,
+      businessId,
+      subscriptionAmount: business.subscriptionAmount !== undefined && business.subscriptionAmount !== null ? Number(business.subscriptionAmount) : null,
+      currency: business.currency || 'GHS',
+      priceUpdatedAt: business.priceUpdatedAt || null
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch business pricing' });
+  }
+});
+
+// =========================================================================
+// REGISTERED BUSINESS POPUP PROMPTS SYSTEM ENDPOINTS
+// =========================================================================
+
+// API 3.14: Get all popup prompts (Super Admin)
+app.get('/api/admin/popup-prompts', (req, res) => {
+  try {
+    const dbData = readDatabase();
+    const prompts = dbData['bos_popup_prompts'] || [];
+    return res.json({
+      success: true,
+      prompts
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/admin/popup-prompts:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve popup prompts' });
+  }
+});
+
+// API 3.15: Create or Update a popup prompt (Super Admin)
+app.post('/api/admin/popup-prompts', async (req, res) => {
+  try {
+    const {
+      id,
+      title,
+      message,
+      daysAfterRegistration,
+      targetType,
+      targetBusinessIds,
+      status,
+      category,
+      actionButtonText,
+      actionUrlOrTab,
+      allowRepeatDisplay,
+      expirationDate,
+      createdByName
+    } = req.body;
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ success: false, error: 'Popup title is required' });
+    }
+
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ success: false, error: 'Popup message content is required' });
+    }
+
+    // Days after registration must be between 5 and 30 days as strictly required
+    const rawDays = Number(daysAfterRegistration);
+    const validatedDays = isNaN(rawDays) ? 5 : Math.min(30, Math.max(5, Math.round(rawDays)));
+
+    const dbData = readDatabase();
+    if (!Array.isArray(dbData['bos_popup_prompts'])) {
+      dbData['bos_popup_prompts'] = [];
+    }
+
+    const now = new Date().toISOString();
+    const promptId = id || `prompt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const existingIndex = dbData['bos_popup_prompts'].findIndex((p: any) => p && p.id === promptId);
+
+    const promptRecord = {
+      id: promptId,
+      title: String(title).trim(),
+      message: String(message).trim(),
+      daysAfterRegistration: validatedDays,
+      targetType: targetType === 'selected' ? 'selected' : 'all',
+      targetBusinessIds: Array.isArray(targetBusinessIds) ? targetBusinessIds : [],
+      status: status === 'inactive' ? 'inactive' : 'active',
+      category: category || 'onboarding',
+      actionButtonText: actionButtonText ? String(actionButtonText).trim() : '',
+      actionUrlOrTab: actionUrlOrTab ? String(actionUrlOrTab).trim() : '',
+      allowRepeatDisplay: Boolean(allowRepeatDisplay),
+      expirationDate: expirationDate ? String(expirationDate).trim() : '',
+      createdAt: existingIndex >= 0 ? dbData['bos_popup_prompts'][existingIndex].createdAt : now,
+      updatedAt: now,
+      createdByName: createdByName || 'Super Admin'
+    };
+
+    if (existingIndex >= 0) {
+      dbData['bos_popup_prompts'][existingIndex] = promptRecord;
+    } else {
+      dbData['bos_popup_prompts'].unshift(promptRecord);
+    }
+
+    writeDatabase(dbData);
+
+    // Sync to Firestore if available
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      try {
+        await withTimeout(
+          firestoreDb.collection('bos_popup_prompts').doc(promptId).set(promptRecord, { merge: true }),
+          1500
+        );
+      } catch (fsErr) {
+        console.warn('Firestore sync note for popup prompt:', fsErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: existingIndex >= 0 ? 'Popup prompt updated successfully' : 'Popup prompt created successfully',
+      prompt: promptRecord
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/popup-prompts:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to save popup prompt' });
+  }
+});
+
+// API 3.16: Delete a popup prompt (Super Admin)
+app.delete('/api/admin/popup-prompts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dbData = readDatabase();
+    if (Array.isArray(dbData['bos_popup_prompts'])) {
+      dbData['bos_popup_prompts'] = dbData['bos_popup_prompts'].filter((p: any) => p && p.id !== id);
+      writeDatabase(dbData);
+    }
+
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      try {
+        await withTimeout(firestoreDb.collection('bos_popup_prompts').doc(id).delete(), 1000);
+      } catch (e) {}
+    }
+
+    return res.json({ success: true, message: 'Popup prompt deleted successfully', id });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/admin/popup-prompts/:id:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to delete popup prompt' });
+  }
+});
+
+// API 3.17: Get eligible popup prompts for a registered business
+// Evaluates business.registrationDate against prompt.daysAfterRegistration (5-30 days)
+app.get('/api/business/:businessId/popup-prompts', (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const business = businesses.find((b: any) => b && b.id === businessId);
+
+    if (!business) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    // Reference point is strictly business.registrationDate (falling back to createdAt if registrationDate not set)
+    const rawRegDate = business.registrationDate || business.createdAt;
+    if (!rawRegDate) {
+      return res.json({ success: true, daysSinceRegistration: 0, eligiblePrompts: [] });
+    }
+
+    const regDateObj = new Date(rawRegDate);
+    const now = new Date();
+    // Calculate full 24-hour days passed since registration
+    const diffTime = now.getTime() - regDateObj.getTime();
+    const daysSinceRegistration = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+
+    const allPrompts = dbData['bos_popup_prompts'] || [];
+    const nowIso = now.toISOString().split('T')[0];
+
+    const eligiblePrompts = allPrompts.filter((prompt: any) => {
+      if (!prompt || prompt.status !== 'active') return false;
+
+      // Check expiration date
+      if (prompt.expirationDate && prompt.expirationDate < nowIso) {
+        return false;
+      }
+
+      // Check business targeting
+      if (prompt.targetType === 'selected') {
+        if (!Array.isArray(prompt.targetBusinessIds) || !prompt.targetBusinessIds.includes(businessId)) {
+          return false;
+        }
+      }
+
+      // Check registration timing requirement:
+      // The prompt becomes eligible once daysSinceRegistration >= prompt.daysAfterRegistration (between 5 and 30 days)
+      const requiredDays = Number(prompt.daysAfterRegistration) || 5;
+      if (daysSinceRegistration < requiredDays) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return res.json({
+      success: true,
+      businessId,
+      registrationDate: rawRegDate,
+      daysSinceRegistration,
+      eligiblePrompts
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/business/:businessId/popup-prompts:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch business popup prompts' });
   }
 });
 

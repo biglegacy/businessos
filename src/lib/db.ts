@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Business, User, Product, Service, Customer, Sale, Expense, ActivityLog, Branch, StockTransfer, CustomerReturn, SupplierReturn, GlobalFeature, AdminFeatureChangeLog, ProfessionalServiceJob, MenuItem, Ingredient, Recipe, RestaurantTable, RestaurantOrder, Reservation, Supplier, Notification, PrinterSettings, PaystackSettings, PaymentTransaction, GlobalSystemConfig, NotificationPreferences, PushDeviceToken, NotificationLog, SalonAppointment, SalonStaff, LaundryOrder, LaundryService, ScannerSession, ScannedItemPayload, PrintCommand, REQUIRED_BUSINESS_TYPES, TravelCustomer, TravelBooking, TravelFlight, TravelHotel, TravelVisa, TravelPassport, TravelPackage, TravelTransport, TravelInsurance, TravelSupplier, TravelPartner, TravelDocument, TravelMarketing, Student, Teacher, SchoolClass, FeeInvoice, FeePayment, AttendanceRecord, ExamGrade, SchoolTimetableEntry, SchoolAnnouncement, SmsSettings, WhatsAppSettings } from '../types';
+import { Business, User, Product, Service, Customer, Sale, Expense, ActivityLog, Branch, StockTransfer, CustomerReturn, SupplierReturn, GlobalFeature, AdminFeatureChangeLog, ProfessionalServiceJob, MenuItem, Ingredient, Recipe, RestaurantTable, RestaurantOrder, Reservation, Supplier, Notification, PrinterSettings, PaystackSettings, PaymentTransaction, GlobalSystemConfig, NotificationPreferences, PushDeviceToken, NotificationLog, SalonAppointment, SalonStaff, LaundryOrder, LaundryService, ScannerSession, ScannedItemPayload, PrintCommand, REQUIRED_BUSINESS_TYPES, TravelCustomer, TravelBooking, TravelFlight, TravelHotel, TravelVisa, TravelPassport, TravelPackage, TravelTransport, TravelInsurance, TravelSupplier, TravelPartner, TravelDocument, TravelMarketing, Student, Teacher, SchoolClass, FeeInvoice, FeePayment, AttendanceRecord, ExamGrade, SchoolTimetableEntry, SchoolAnnouncement, SmsSettings, WhatsAppSettings, BusinessPopupPrompt, SmsTimingDetails, PharmacyBatch, Prescription } from '../types';
 import { firestore, doc, setDoc, deleteDoc, collection, onSnapshot, storage, ref, uploadString, getDownloadURL, handleFirestoreError, OperationType } from './firebase';
 
 export const ALL_DB_KEYS = [
@@ -28,7 +28,9 @@ export const ALL_DB_KEYS = [
   'bos_students', 'bos_teachers', 'bos_classes',
   'bos_fee_invoices', 'bos_fee_payments', 'bos_attendance',
   'bos_exam_grades', 'bos_timetable', 'bos_school_announcements',
-  'bos_sms_settings', 'bos_whatsapp_settings'
+  'bos_sms_settings', 'bos_whatsapp_settings', 'bos_popup_prompts',
+  'bos_prescriptions', 'bos_pharmacy_batches',
+  'bos_deleted_business_ids', 'bos_pricing_plans'
 ];
 
 // Smart record merging helper across devices and updates
@@ -479,6 +481,17 @@ class CloudDatabase {
       const cloudData = await res.json();
       if (!cloudData || typeof cloudData !== 'object') return;
 
+      // FIRST: Synchronize tombstones so all deletions take immediate effect
+      if (Array.isArray(cloudData['bos_deleted_business_ids'])) {
+        let localDeleted: string[] = [];
+        try {
+          const raw = localStorage.getItem('bos_deleted_business_ids');
+          if (raw) localDeleted = JSON.parse(raw) || [];
+        } catch (e) {}
+        const mergedDeleted = Array.from(new Set([...localDeleted, ...cloudData['bos_deleted_business_ids']]));
+        localStorage.setItem('bos_deleted_business_ids', JSON.stringify(mergedDeleted));
+      }
+
       let hasChanges = false;
       const keys = Object.keys(cloudData);
 
@@ -486,7 +499,7 @@ class CloudDatabase {
         if (k.startsWith('bos_') && Array.isArray(cloudData[k])) {
           const cloudItems = cloudData[k];
           const localItems = this.read<any>(k);
-          const merged = mergeRecordArrays(localItems, cloudItems);
+          const merged = mergeRecordArrays(localItems, cloudItems, k);
           const mergedStr = JSON.stringify(merged);
           const localValStr = localStorage.getItem(k) || '[]';
 
@@ -656,6 +669,102 @@ class CloudDatabase {
     this.write('bos_businesses', list);
   }
 
+  public async toggleBusinessSms(businessId: string, smsEnabled: boolean): Promise<boolean> {
+    const list = this.getBusinesses();
+    const idx = list.findIndex(b => b.id === businessId);
+    if (idx >= 0) {
+      list[idx].smsEnabled = smsEnabled;
+      list[idx].updatedAt = new Date().toISOString();
+      this.write('bos_businesses', list);
+    }
+    try {
+      await fetch('/api/admin/business-sms-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId, smsEnabled })
+      });
+      return true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  // --- PRICING PLANS OPERATIONS ---
+  public getPricingPlans(): any[] {
+    const plans = this.read<any>('bos_pricing_plans');
+    if (!plans || plans.length === 0) {
+      const defaultPlans = [
+        {
+          id: 'plan_starter',
+          name: 'Starter Plan',
+          price: 150,
+          currency: 'GHS',
+          billingCycle: 'monthly',
+          description: 'Basic POS, inventory tracking, and sales reports for single-branch stores.',
+          features: ['Single Location', 'Unlimited Products', 'POS Transactions', 'Daily Reports', 'Receipt Printing'],
+          isActive: true,
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'plan_professional',
+          name: 'Professional Business',
+          price: 350,
+          currency: 'GHS',
+          billingCycle: 'monthly',
+          description: 'Multi-user access, customer loyalty, advanced analytics, and transactional SMS receipts.',
+          features: ['Up to 5 Users', 'Transactional SMS Integration', 'Advanced Inventory & Stock Alerts', 'Multi-Branch Transfer', 'Customer Accounts'],
+          isActive: true,
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'plan_enterprise',
+          name: 'Enterprise Scale',
+          price: 750,
+          currency: 'GHS',
+          billingCycle: 'monthly',
+          description: 'Unlimited capacity, multi-branch hierarchy, custom modules, and dedicated priority support.',
+          features: ['Unlimited Users & Branches', 'Custom Industry Archetypes', 'Automated Daily Backups', 'Audit Log Forensics', 'Priority 24/7 Support'],
+          isActive: true,
+          updatedAt: new Date().toISOString()
+        }
+      ];
+      this.write('bos_pricing_plans', defaultPlans);
+      return defaultPlans;
+    }
+    return plans;
+  }
+
+  public savePricingPlan(plan: any): void {
+    const plans = this.getPricingPlans();
+    const planId = plan.id || 'plan_' + Date.now();
+    const cleanPlan = {
+      ...plan,
+      id: planId,
+      price: Number(plan.price) || 0,
+      updatedAt: new Date().toISOString()
+    };
+    const idx = plans.findIndex(p => p.id === planId);
+    if (idx >= 0) {
+      plans[idx] = cleanPlan;
+    } else {
+      plans.push(cleanPlan);
+    }
+    this.write('bos_pricing_plans', plans);
+    fetch('/api/admin/pricing-plans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cleanPlan)
+    }).catch(() => {});
+  }
+
+  public deletePricingPlan(planId: string): void {
+    const plans = this.getPricingPlans().filter(p => p.id !== planId);
+    this.write('bos_pricing_plans', plans);
+    fetch(`/api/admin/pricing-plans/${planId}`, {
+      method: 'DELETE'
+    }).catch(() => {});
+  }
+
   public purgeLocalBusinessData(id: string): void {
     // Record tombstone in localStorage
     let deletedIds: string[] = [];
@@ -738,7 +847,18 @@ class CloudDatabase {
       // 3. Purge local cache, local tombstones, and force business removal immediately
       this.purgeLocalBusinessData(id);
 
-      // 4. Asynchronously purge any client-side Firestore documents collected
+      // 4. Record tombstone in Firestore and purge Firestore documents
+      try {
+        setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
+          id,
+          businessId: id,
+          deletedAt: new Date().toISOString()
+        }).catch(() => {});
+        deleteDoc(doc(firestore, 'bos_businesses', id)).catch(() => {});
+        deleteDoc(doc(firestore, 'businesses', id)).catch(() => {});
+      } catch (e) {}
+
+      // Asynchronously purge any client-side Firestore documents collected
       docsToDelete.forEach(({ collection, docId }) => {
         deleteDoc(doc(firestore, collection, docId)).catch(() => {});
       });
@@ -1266,6 +1386,73 @@ class CloudDatabase {
   public deleteServiceJob(businessId: string, id: string): void {
     const list = this.getServiceJobsRaw().filter(j => !(j.id === id && j.businessId === businessId));
     this.write('bos_service_jobs', list);
+  }
+
+  public getProfessionalServiceJobs(businessId: string): ProfessionalServiceJob[] {
+    return this.getServiceJobs(businessId);
+  }
+
+  public saveProfessionalServiceJob(businessId: string, job: ProfessionalServiceJob): void {
+    this.saveServiceJob(businessId, job);
+  }
+
+  public getEmployees(businessId: string): User[] {
+    return this.getUsers().filter(u => u.businessId === businessId);
+  }
+
+  public getAppointments(businessId: string): SalonAppointment[] {
+    return this.getSalonAppointments(businessId);
+  }
+
+  // --- PHARMACY & PRESCRIPTION OPERATIONS ---
+  private getPrescriptionsRaw(): Prescription[] {
+    return this.read<Prescription>('bos_prescriptions');
+  }
+
+  public getPrescriptions(businessId: string): Prescription[] {
+    return this.getPrescriptionsRaw().filter(p => p.businessId === businessId);
+  }
+
+  public savePrescription(businessId: string, prescription: Prescription): void {
+    const list = this.getPrescriptionsRaw();
+    const idx = list.findIndex(p => p.id === prescription.id && p.businessId === businessId);
+    const target = { ...prescription, businessId };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_prescriptions', list);
+  }
+
+  public deletePrescription(businessId: string, id: string): void {
+    const list = this.getPrescriptionsRaw().filter(p => !(p.id === id && p.businessId === businessId));
+    this.write('bos_prescriptions', list);
+  }
+
+  private getPharmacyBatchesRaw(): PharmacyBatch[] {
+    return this.read<PharmacyBatch>('bos_pharmacy_batches');
+  }
+
+  public getPharmacyBatches(businessId: string): PharmacyBatch[] {
+    return this.getPharmacyBatchesRaw().filter(b => b.businessId === businessId);
+  }
+
+  public savePharmacyBatch(businessId: string, batch: PharmacyBatch): void {
+    const list = this.getPharmacyBatchesRaw();
+    const idx = list.findIndex(b => b.id === batch.id && b.businessId === businessId);
+    const target = { ...batch, businessId };
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    this.write('bos_pharmacy_batches', list);
+  }
+
+  public deletePharmacyBatch(businessId: string, id: string): void {
+    const list = this.getPharmacyBatchesRaw().filter(b => !(b.id === id && b.businessId === businessId));
+    this.write('bos_pharmacy_batches', list);
   }
 
   // --- RESTAURANT OPERATIONS ---
@@ -2512,26 +2699,34 @@ class CloudDatabase {
     }
   }
 
-  public async sendTestSms(phoneNumber: string, message?: string): Promise<{
+  public async sendTestSms(phoneNumber: string, message?: string, clientTriggerTime?: number): Promise<{
     success: boolean;
     status: string;
     message: string;
     recipient?: string;
     details?: any;
+    timings?: SmsTimingDetails;
   }> {
+    const triggerTime = clientTriggerTime || Date.now();
     try {
       const res = await fetch('/api/admin/sms/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber, message })
+        body: JSON.stringify({ phoneNumber, message, clientTriggerTime: triggerTime })
       });
       const data = await res.json();
       return data;
     } catch (err: any) {
+      const completion = Date.now();
       return {
         success: false,
         status: 'Network error',
-        message: err.message || 'Failed to send test SMS due to network error'
+        message: err.message || 'Failed to send test SMS due to network error',
+        timings: {
+          clientTriggerTime: triggerTime,
+          submissionCompletionTime: completion,
+          totalSubmissionMs: completion - triggerTime
+        }
       };
     }
   }
@@ -2543,26 +2738,35 @@ class CloudDatabase {
     idempotencyKey?: string;
     businessId?: string;
     type?: string;
+    clientTriggerTime?: number;
   }): Promise<{
     success: boolean;
     status: string;
     message: string;
     recipient?: string;
     details?: any;
+    timings?: SmsTimingDetails;
   }> {
+    const triggerTime = payload.clientTriggerTime || Date.now();
     try {
       const res = await fetch('/api/sms/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, clientTriggerTime: triggerTime })
       });
       const data = await res.json();
       return data;
     } catch (err: any) {
+      const completion = Date.now();
       return {
         success: false,
         status: 'Network error',
-        message: err.message || 'Network error while sending SMS'
+        message: err.message || 'Network error while sending SMS',
+        timings: {
+          clientTriggerTime: triggerTime,
+          submissionCompletionTime: completion,
+          totalSubmissionMs: completion - triggerTime
+        }
       };
     }
   }
@@ -2578,6 +2782,189 @@ class CloudDatabase {
       console.warn('Error fetching SMS logs:', e);
     }
     return [];
+  }
+
+  // =========================================================================
+  // SUPER ADMIN BUSINESS PRICING METHODS
+  // =========================================================================
+
+  public async getBusinessPricingList(): Promise<any[]> {
+    try {
+      const res = await fetch('/api/admin/business-pricing');
+      if (res.ok) {
+        const data = await res.json();
+        return data.businesses || [];
+      }
+    } catch (err) {
+      console.warn('Error fetching business pricing list:', err);
+    }
+    // Fallback to local businesses
+    const localBusinesses = this.getBusinesses();
+    return localBusinesses.map(b => ({
+      id: b.id,
+      name: b.name,
+      category: b.category,
+      status: b.status,
+      currency: b.currency || 'GHS',
+      subscriptionAmount: b.subscriptionAmount !== undefined ? b.subscriptionAmount : null,
+      priceUpdatedAt: b.priceUpdatedAt || null,
+      priceUpdatedBy: b.priceUpdatedBy || null,
+      registrationDate: b.registrationDate || b.createdAt || null,
+      ownerEmail: b.email || null
+    }));
+  }
+
+  public async updateBusinessPrice(businessId: string, subscriptionAmount: number, priceUpdatedBy = 'Super Admin'): Promise<{
+    success: boolean;
+    message: string;
+    business?: any;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/business-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId, subscriptionAmount, priceUpdatedBy })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Also update in-memory / local storage business record
+        const bus = this.getBusinesses().find(b => b.id === businessId);
+        if (bus) {
+          bus.subscriptionAmount = Number(subscriptionAmount);
+          bus.priceUpdatedAt = new Date().toISOString();
+          bus.priceUpdatedBy = priceUpdatedBy;
+          this.saveBusiness(bus);
+        }
+        return data;
+      }
+      return { success: false, message: data.error || 'Failed to update pricing' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error updating pricing' };
+    }
+  }
+
+  public async getBusinessPricing(businessId: string): Promise<{
+    subscriptionAmount: number | null;
+    currency: string;
+    priceUpdatedAt?: string | null;
+  }> {
+    try {
+      const res = await fetch(`/api/business/${businessId}/pricing`);
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          subscriptionAmount: data.subscriptionAmount,
+          currency: data.currency || 'GHS',
+          priceUpdatedAt: data.priceUpdatedAt
+        };
+      }
+    } catch (e) {
+      console.warn('Error fetching business pricing:', e);
+    }
+    const bus = this.getBusinesses().find(b => b.id === businessId);
+    return {
+      subscriptionAmount: bus?.subscriptionAmount !== undefined ? bus.subscriptionAmount : null,
+      currency: bus?.currency || 'GHS',
+      priceUpdatedAt: bus?.priceUpdatedAt || null
+    };
+  }
+
+  // =========================================================================
+  // REGISTERED BUSINESS POPUP PROMPT METHODS
+  // =========================================================================
+
+  public async getAdminPopupPrompts(): Promise<BusinessPopupPrompt[]> {
+    try {
+      const res = await fetch('/api/admin/popup-prompts');
+      if (res.ok) {
+        const data = await res.json();
+        return data.prompts || [];
+      }
+    } catch (err) {
+      console.warn('Error fetching admin popup prompts:', err);
+    }
+    return this.read<BusinessPopupPrompt>('bos_popup_prompts');
+  }
+
+  public async savePopupPrompt(prompt: Partial<BusinessPopupPrompt>): Promise<{
+    success: boolean;
+    message: string;
+    prompt?: BusinessPopupPrompt;
+  }> {
+    try {
+      const res = await fetch('/api/admin/popup-prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prompt)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Also sync local cache
+        const prompts = this.read<BusinessPopupPrompt>('bos_popup_prompts');
+        const idx = prompts.findIndex(p => p.id === data.prompt.id);
+        if (idx >= 0) {
+          prompts[idx] = data.prompt;
+        } else {
+          prompts.unshift(data.prompt);
+        }
+        this.write<BusinessPopupPrompt>('bos_popup_prompts', prompts);
+        return data;
+      }
+      return { success: false, message: data.error || 'Failed to save popup prompt' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error saving popup prompt' };
+    }
+  }
+
+  public async deletePopupPrompt(id: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch(`/api/admin/popup-prompts/${id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const prompts = this.read<BusinessPopupPrompt>('bos_popup_prompts').filter(p => p.id !== id);
+        this.write<BusinessPopupPrompt>('bos_popup_prompts', prompts);
+        return data;
+      }
+      return { success: false, message: data.error || 'Failed to delete popup prompt' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Network error deleting popup prompt' };
+    }
+  }
+
+  public async getEligibleBusinessPopups(businessId: string): Promise<{
+    success: boolean;
+    daysSinceRegistration: number;
+    registrationDate: string;
+    eligiblePrompts: BusinessPopupPrompt[];
+  }> {
+    try {
+      const res = await fetch(`/api/business/${businessId}/popup-prompts`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.warn('Error fetching eligible popups from server:', err);
+    }
+    // Fallback calculation using local data
+    const bus = this.getBusinesses().find(b => b.id === businessId);
+    if (!bus) return { success: false, daysSinceRegistration: 0, registrationDate: '', eligiblePrompts: [] };
+    const regDate = bus.registrationDate || bus.createdAt || new Date().toISOString();
+    const diffDays = Math.max(0, Math.floor((Date.now() - new Date(regDate).getTime()) / (1000 * 60 * 60 * 24)));
+    const allPrompts = this.read<BusinessPopupPrompt>('bos_popup_prompts');
+    const eligible = allPrompts.filter(p => {
+      if (p.status !== 'active') return false;
+      if (p.targetType === 'selected' && (!p.targetBusinessIds || !p.targetBusinessIds.includes(businessId))) return false;
+      return diffDays >= (p.daysAfterRegistration || 5);
+    });
+    return {
+      success: true,
+      daysSinceRegistration: diffDays,
+      registrationDate: regDate,
+      eligiblePrompts: eligible
+    };
   }
 }
 

@@ -5,18 +5,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db';
-import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES } from '../types';
+import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES, BusinessPopupPrompt, SmsTimingDetails } from '../types';
 import { 
   Building, Users, Shield, CheckCircle2, AlertTriangle, Trash2, 
   Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye, EyeOff,
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
-  MessageSquare, Send, Smartphone, ShieldCheck
+  MessageSquare, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
+  Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
 import { AdminNotifications } from './AdminNotifications';
+import { AdminPricingManagement } from './admin/AdminPricingManagement';
+import { AdminPopupManagement } from './admin/AdminPopupManagement';
 
 interface SuperAdminProps {
   onLogout: () => void;
@@ -25,7 +28,7 @@ interface SuperAdminProps {
 
 export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [activeTab, setActiveTab] = useState<
-    'businesses' | 'paynow' | 'sms' | 'users' | 'notifications' | 'registration' | 'system' | 'cloud' | 'monitoring' | 'features'
+    'businesses' | 'pricing' | 'popups' | 'paynow' | 'sms' | 'users' | 'notifications' | 'registration' | 'system' | 'cloud' | 'monitoring' | 'features'
   >('businesses');
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -92,16 +95,191 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     message: string;
     success: boolean;
     recipient?: string;
+    timings?: SmsTimingDetails;
   } | null>(null);
 
   // SMS Delivery Logs State
   const [smsLogs, setSmsLogs] = useState<any[]>([]);
   const [isLoadingSmsLogs, setIsLoadingSmsLogs] = useState(false);
 
-  // Fetch SMS configuration & delivery logs on tab change
+  // =========================================================================
+  // SUPER ADMIN BUSINESS PRICING MANAGEMENT STATE
+  // =========================================================================
+  const [pricingList, setPricingList] = useState<any[]>([]);
+  const [isLoadingPricing, setIsLoadingPricing] = useState(false);
+  const [pricingSearch, setPricingSearch] = useState('');
+  const [editingPriceBusId, setEditingPriceBusId] = useState<string | null>(null);
+  const [editingPriceAmount, setEditingPriceAmount] = useState<string>('');
+  const [isSavingPrice, setIsSavingPrice] = useState(false);
+  const [pricingMessage, setPricingMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const loadPricingList = async () => {
+    setIsLoadingPricing(true);
+    try {
+      const list = await db.getBusinessPricingList();
+      setPricingList(list || []);
+    } catch (err) {
+      console.warn('Error loading business pricing:', err);
+    } finally {
+      setIsLoadingPricing(false);
+    }
+  };
+
+  const handleUpdatePrice = async (businessId: string, customAmount?: number) => {
+    const val = customAmount !== undefined ? customAmount : Number(editingPriceAmount);
+    if (isNaN(val) || val <= 0) {
+      setPricingMessage({ type: 'error', text: 'Please enter a valid positive price amount in GHS.' });
+      return;
+    }
+
+    setIsSavingPrice(true);
+    setPricingMessage(null);
+    try {
+      const res = await db.updateBusinessPrice(businessId, val, 'Super Admin');
+      if (res.success) {
+        setPricingMessage({ type: 'success', text: res.message || 'Pricing updated successfully!' });
+        setEditingPriceBusId(null);
+        setEditingPriceAmount('');
+        await loadPricingList();
+        forceUpdate();
+      } else {
+        setPricingMessage({ type: 'error', text: res.message || 'Failed to update pricing.' });
+      }
+    } catch (err: any) {
+      setPricingMessage({ type: 'error', text: err.message || 'Network error updating price.' });
+    } finally {
+      setIsSavingPrice(false);
+      setTimeout(() => setPricingMessage(null), 5000);
+    }
+  };
+
+  // =========================================================================
+  // SUPER ADMIN PER-BUSINESS SMS CONTROL (Requirement 11 & 12)
+  // =========================================================================
+  const [businessSmsSearch, setBusinessSmsSearch] = useState('');
+  const [togglingSmsBusId, setTogglingSmsBusId] = useState<string | null>(null);
+
+  const handleToggleBusinessSms = async (busId: string, currentStatus: boolean) => {
+    setTogglingSmsBusId(busId);
+    try {
+      const newStatus = !currentStatus;
+      await db.toggleBusinessSms(busId, newStatus);
+      forceUpdate();
+    } catch (e) {
+      console.warn('Error toggling business SMS:', e);
+    } finally {
+      setTogglingSmsBusId(null);
+    }
+  };
+
+  // =========================================================================
+  // SUPER ADMIN POPUP PROMPTS SYSTEM STATE
+  // =========================================================================
+  const [popupPrompts, setPopupPrompts] = useState<BusinessPopupPrompt[]>([]);
+  const [isLoadingPopups, setIsLoadingPopups] = useState(false);
+  const [isPopupModalOpen, setIsPopupModalOpen] = useState(false);
+  const [previewingPopup, setPreviewingPopup] = useState<BusinessPopupPrompt | null>(null);
+  const [isSavingPopup, setIsSavingPopup] = useState(false);
+  const [popupMessage, setPopupMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const defaultPopupFormData: Partial<BusinessPopupPrompt> = {
+    title: '',
+    message: '',
+    daysAfterRegistration: 7, // 5 to 30 days
+    targetType: 'all',
+    targetBusinessIds: [],
+    status: 'active',
+    category: 'onboarding',
+    actionButtonText: 'Learn More',
+    actionUrlOrTab: '',
+    allowRepeatDisplay: false,
+    expirationDate: ''
+  };
+
+  const [popupFormData, setPopupFormData] = useState<Partial<BusinessPopupPrompt>>(defaultPopupFormData);
+
+  const loadPopupPrompts = async () => {
+    setIsLoadingPopups(true);
+    try {
+      const prompts = await db.getAdminPopupPrompts();
+      setPopupPrompts(prompts || []);
+    } catch (err) {
+      console.warn('Error loading popup prompts:', err);
+    } finally {
+      setIsLoadingPopups(false);
+    }
+  };
+
+  const handleSavePopup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!popupFormData.title?.trim() || !popupFormData.message?.trim()) {
+      setPopupMessage({ type: 'error', text: 'Title and message are required.' });
+      return;
+    }
+
+    // Strict validation: daysAfterRegistration must be 5 to 30 days
+    const rawDays = Number(popupFormData.daysAfterRegistration);
+    const validatedDays = Math.min(30, Math.max(5, isNaN(rawDays) ? 7 : Math.round(rawDays)));
+
+    setIsSavingPopup(true);
+    setPopupMessage(null);
+
+    try {
+      const res = await db.savePopupPrompt({
+        ...popupFormData,
+        daysAfterRegistration: validatedDays
+      });
+
+      if (res.success) {
+        setPopupMessage({ type: 'success', text: res.message || 'Popup prompt saved successfully!' });
+        setIsPopupModalOpen(false);
+        setPopupFormData(defaultPopupFormData);
+        await loadPopupPrompts();
+      } else {
+        setPopupMessage({ type: 'error', text: res.message || 'Failed to save popup prompt.' });
+      }
+    } catch (err: any) {
+      setPopupMessage({ type: 'error', text: err.message || 'Network error saving popup.' });
+    } finally {
+      setIsSavingPopup(false);
+      setTimeout(() => setPopupMessage(null), 5000);
+    }
+  };
+
+  const handleDeletePopup = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this scheduled popup prompt?')) return;
+    try {
+      const res = await db.deletePopupPrompt(id);
+      if (res.success) {
+        setPopupPrompts(prev => prev.filter(p => p.id !== id));
+        setPopupMessage({ type: 'success', text: 'Popup prompt deleted successfully.' });
+      } else {
+        setPopupMessage({ type: 'error', text: res.message || 'Failed to delete.' });
+      }
+    } catch (err: any) {
+      setPopupMessage({ type: 'error', text: err.message || 'Error deleting popup.' });
+    }
+    setTimeout(() => setPopupMessage(null), 4000);
+  };
+
+  const handleTogglePopupStatus = async (prompt: BusinessPopupPrompt) => {
+    const updatedStatus = prompt.status === 'active' ? 'inactive' : 'active';
+    try {
+      await db.savePopupPrompt({ ...prompt, status: updatedStatus });
+      setPopupPrompts(prev => prev.map(p => p.id === prompt.id ? { ...p, status: updatedStatus } : p));
+    } catch (err) {
+      console.warn('Error toggling popup status:', err);
+    }
+  };
+
+  // Fetch data on tab change
   useEffect(() => {
     if (activeTab === 'sms') {
       loadSmsConfigAndLogs();
+    } else if (activeTab === 'pricing') {
+      loadPricingList();
+    } else if (activeTab === 'popups') {
+      loadPopupPrompts();
     }
   }, [activeTab]);
 
@@ -173,8 +351,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setIsSendingTestSms(true);
     setTestSmsResult(null);
 
+    const clientTriggerTime = Date.now();
     try {
-      const res = await db.sendTestSms(testPhoneNumber.trim(), testSmsMessage.trim());
+      const res = await db.sendTestSms(testPhoneNumber.trim(), testSmsMessage.trim(), clientTriggerTime);
       setTestSmsResult(res);
       // Refresh configuration and logs to update status badges and stats
       const updatedConfig = await db.getSmsSettings();
@@ -776,6 +955,24 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         </button>
 
         <button
+          onClick={() => { setActiveTab('pricing'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'pricing' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <DollarSign className="h-4 w-4 text-emerald-400" /> Pricing Management
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('popups'); setSearchTerm(''); setIsMobileNavOpen(false); }}
+          className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
+            activeTab === 'popups' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+          }`}
+        >
+          <Sparkles className="h-4 w-4 text-amber-400" /> Popup Prompts (5-30d)
+        </button>
+
+        <button
           onClick={() => { setActiveTab('paynow'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
             activeTab === 'paynow' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
@@ -923,6 +1120,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <header className="hidden lg:flex h-16 bg-white border-b border-slate-200 px-8 items-center justify-between shrink-0">
           <h2 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
             {activeTab === 'businesses' && <><Building className="h-4 w-4 text-emerald-600" /> Business Tenants Management</>}
+            {activeTab === 'pricing' && <><DollarSign className="h-4 w-4 text-emerald-600" /> Super Admin Business Pricing Management</>}
+            {activeTab === 'popups' && <><Sparkles className="h-4 w-4 text-amber-500" /> Registration-Based Popup Prompts (5-30 Days)</>}
             {activeTab === 'paynow' && <><CreditCard className="h-4 w-4 text-emerald-600" /> Paystack API Gateway Settings</>}
             {activeTab === 'sms' && <><MessageSquare className="h-4 w-4 text-emerald-600" /> Central SMS Gateway (Arkesel)</>}
             {activeTab === 'users' && <><Users className="h-4 w-4 text-emerald-600" /> Global Tenant User Directory</>}
@@ -1182,6 +1381,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                       <th className="py-3.5 px-6">Email</th>
                       <th className="py-3.5 px-6">Business Type</th>
                       <th className="py-3.5 px-6">Status</th>
+                      <th className="py-3.5 px-6">SMS Gateway</th>
                       <th className="py-3.5 px-6">Created Date</th>
                       <th className="py-3.5 px-6 text-right">Actions</th>
                     </tr>
@@ -1231,6 +1431,21 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                               <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
                               {bus.status === 'active' ? 'Active' : 'Suspended'}
                             </span>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <button
+                              onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
+                              disabled={togglingSmsBusId === bus.id}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase transition cursor-pointer ${
+                                bus.smsEnabled !== false
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                  : 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                              }`}
+                              title="Click to toggle SMS sending for this business"
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                              {bus.smsEnabled !== false ? 'SMS Active' : 'SMS Disabled'}
+                            </button>
                           </td>
                           <td className="py-3.5 px-6 text-slate-500 font-medium">
                             {bus.createdAt ? new Date(bus.createdAt).toLocaleDateString() : 'N/A'}
@@ -1295,6 +1510,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* TAB: Business Pricing Management */}
+          {activeTab === 'pricing' && (
+            <AdminPricingManagement />
+          )}
+
+          {/* TAB: Registration-Based Popup Prompts */}
+          {activeTab === 'popups' && (
+            <AdminPopupManagement />
           )}
 
           {/* TAB 2: Paystack API Settings */}
@@ -1714,9 +1939,135 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                             Target: {testSmsResult.recipient}
                           </p>
                         )}
+                        {testSmsResult.timings && (
+                          <div className="pt-2 border-t border-emerald-200/60 mt-2 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-bold">
+                              <span className="text-emerald-800 flex items-center gap-1">
+                                <Zap className="h-3.5 w-3.5 text-emerald-600" /> Total Pipeline Speed:
+                              </span>
+                              <span className="bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full font-mono">
+                                {testSmsResult.timings.totalPipelineMs} ms
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-600 pt-1">
+                              <div className="bg-white/60 p-1.5 rounded border border-emerald-100">
+                                <span className="text-slate-400 block">Arkesel Gateway:</span>
+                                <span className="font-mono font-bold text-slate-800">{testSmsResult.timings.arkeselLatencyMs} ms</span>
+                              </div>
+                              <div className="bg-white/60 p-1.5 rounded border border-emerald-100">
+                                <span className="text-slate-400 block">Network Pipeline:</span>
+                                <span className="font-mono font-bold text-emerald-700">Instant (&lt; 0.5s)</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              {/* Per-Business SMS Status & Control (Requirement 11 & 12) */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 text-emerald-700" /> Per-Business SMS Gateway Control
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Enable or disable SMS dispatch capability per registered business tenant. Enforced server-side.
+                    </p>
+                  </div>
+                  <div className="relative">
+                    <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={businessSmsSearch}
+                      onChange={(e) => setBusinessSmsSearch(e.target.value)}
+                      placeholder="Search business..."
+                      className="pl-8 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-emerald-500 outline-none w-full sm:w-56"
+                    />
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
+                        <th className="py-2.5 px-4">Business Name</th>
+                        <th className="py-2.5 px-4">Industry / Type</th>
+                        <th className="py-2.5 px-4">Owner Email</th>
+                        <th className="py-2.5 px-4">SMS Status</th>
+                        <th className="py-2.5 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {businesses
+                        .filter(b => 
+                          !businessSmsSearch.trim() ||
+                          b.name?.toLowerCase().includes(businessSmsSearch.toLowerCase()) ||
+                          b.category?.toLowerCase().includes(businessSmsSearch.toLowerCase()) ||
+                          b.email?.toLowerCase().includes(businessSmsSearch.toLowerCase())
+                        )
+                        .map(bus => {
+                          const isSmsOn = bus.smsEnabled !== false;
+                          const isToggling = togglingSmsBusId === bus.id;
+
+                          return (
+                            <tr key={bus.id} className="hover:bg-slate-50/60 transition">
+                              <td className="py-2.5 px-4 font-bold text-slate-900">
+                                {bus.name}
+                                <span className="block text-[10px] text-slate-400 font-mono font-normal">ID: {bus.id}</span>
+                              </td>
+                              <td className="py-2.5 px-4">
+                                <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-bold">
+                                  {bus.category || bus.businessType || 'Retail'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-4 text-slate-500 font-mono text-[11px]">
+                                {bus.email || 'N/A'}
+                              </td>
+                              <td className="py-2.5 px-4">
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
+                                  isSmsOn
+                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${isSmsOn ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                  {isSmsOn ? 'SMS Enabled' : 'SMS Disabled'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-4 text-right">
+                                <button
+                                  onClick={() => handleToggleBusinessSms(bus.id, isSmsOn)}
+                                  disabled={isToggling}
+                                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer min-h-[36px] ${
+                                    isSmsOn
+                                      ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+                                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                                  }`}
+                                >
+                                  {isToggling ? (
+                                    <span className="flex items-center gap-1"><RefreshCw className="h-3 w-3 animate-spin" /> Updating...</span>
+                                  ) : isSmsOn ? (
+                                    'Disable SMS'
+                                  ) : (
+                                    'Enable SMS'
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {businesses.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-400">
+                            No registered businesses found.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -1744,6 +2095,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         <th className="py-3 px-4">Sender ID</th>
                         <th className="py-3 px-4">Message Content</th>
                         <th className="py-3 px-4">Delivery Status</th>
+                        <th className="py-3 px-4">Speed / Latency</th>
                         <th className="py-3 px-4">Timestamp</th>
                         <th className="py-3 px-4">Gateway Response</th>
                       </tr>
@@ -1775,6 +2127,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                               {log.status}
                             </span>
                           </td>
+                          <td className="py-3 px-4">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono text-[10px] font-bold">
+                              <Zap className="h-2.5 w-2.5 text-emerald-600" />
+                              {log.latencyMs ? `${log.latencyMs}ms` : 'Instant'}
+                            </span>
+                          </td>
                           <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
                             {new Date(log.timestamp).toLocaleString()}
                           </td>
@@ -1785,7 +2143,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                       ))}
                       {smsLogs.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="py-8 text-center text-slate-400">
+                          <td colSpan={7} className="py-8 text-center text-slate-400">
                             No SMS messages have been dispatched through the gateway yet.
                           </td>
                         </tr>

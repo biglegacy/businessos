@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db';
 import { auth } from '../lib/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-import { User, Business, REQUIRED_BUSINESS_TYPES } from '../types';
+import { User, Business, REQUIRED_BUSINESS_TYPES, BUSINESS_TYPE_GROUPS } from '../types';
 import { showSuccess, showError } from '../lib/toast';
 import { InstallAppButton } from './InstallAppButton';
 import { 
@@ -762,10 +762,14 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
                     onChange={(e) => setRegCategory(e.target.value)}
                     className="mt-1 block w-full py-2 px-3 border border-slate-200 bg-white rounded-xl text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm cursor-pointer"
                   >
-                    {REQUIRED_BUSINESS_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
+                    {BUSINESS_TYPE_GROUPS.map((group) => (
+                      <optgroup key={group.name} label={group.name}>
+                        {group.types.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>

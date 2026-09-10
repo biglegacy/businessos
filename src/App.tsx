@@ -43,6 +43,7 @@ import { FastFoodRecipes } from './components/FastFoodRecipes';
 import { FastFoodReports } from './components/FastFoodReports';
 import { InstallAppButton } from './components/InstallAppButton';
 import { PopupNotificationInterface } from './components/PopupNotificationInterface';
+import { RegistrationPopupModal } from './components/RegistrationPopupModal';
 import { SubscriptionReminderModal } from './components/SubscriptionReminderModal';
 import { requestNotificationPermission } from './lib/pushNotifications';
 
@@ -74,13 +75,22 @@ import { TravelCalendar } from './components/travel/TravelCalendar';
 import { TravelReports } from './components/travel/TravelReports';
 import { TravelMarketingCampaigns } from './components/travel/TravelMarketing';
 
+// Pharmacy Module Components
+import { PharmacyDashboard } from './components/PharmacyDashboard';
+import { PharmacyPOS } from './components/PharmacyPOS';
+
+// Service Business Module Components
+import { ServiceBusinessDashboard } from './components/ServiceBusinessDashboard';
+
+import { getIndustryArchetype } from './lib/businessType';
+
 import { 
   LayoutDashboard, ShoppingCart, Package, Users, Receipt, 
   Settings as SettingsIcon, LogOut, Sparkles, FolderLock, 
   RotateCcw, Eye, Search, Filter, Calendar, TrendingDown,
   TrendingUp, CreditCard, UserCheck, AlertTriangle, X, Menu, FileDown,
   Bell, Building2, ClipboardList, Shield, RefreshCw, Cloud, CloudOff,
-  Check, Play, Grid, Flame, FileText, Truck, Shirt, Plane, Compass, Send, FileCheck
+  Check, Play, Grid, Flame, FileText, Truck, Shirt, Plane, Compass, Send, FileCheck, Pill, Wrench
 } from 'lucide-react';
 import { exportSalesToCSV } from './lib/csvExport';
 
@@ -874,6 +884,25 @@ export default function App() {
       return lndTabs;
     }
 
+    const currentArchetype = getIndustryArchetype(activeBusiness?.category, activeBusiness?.businessType);
+    if (currentArchetype === 'pharmacy') {
+      let pharmTabs = ['Dashboard', 'POS', 'Products', 'Inventory', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees', 'Returns'];
+      if (!isOwnerOrAdmin) {
+        if (role === 'cashier') pharmTabs = ['POS', 'Sales'];
+        if (role === 'inventory_staff') pharmTabs = ['Products', 'Inventory', 'Returns'];
+      }
+      return pharmTabs;
+    }
+
+    if (currentArchetype === 'service') {
+      let srvTabs = ['Dashboard', 'POS', 'Services', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees'];
+      if (!isOwnerOrAdmin) {
+        if (role === 'cashier') srvTabs = ['POS', 'Sales'];
+        if (role === 'salesperson') srvTabs = ['POS', 'Customers'];
+      }
+      return srvTabs;
+    }
+
     let tabs: string[] = [];
     switch (role) {
       case 'owner':
@@ -977,11 +1006,14 @@ export default function App() {
   const authorizedTabs = getAuthorizedTabs(currentUser.role);
 
   // Sidebar navigation options
-  const isTravel = (activeBusiness?.category === 'Travel & Tour' || activeBusiness?.businessType === 'Travel & Tour' || activeBusiness?.category === 'Travel Agencies' || activeBusiness?.businessType === 'Travel Agencies');
-  const isSalon = (activeBusiness?.category === 'Salon & Barbers' || activeBusiness?.businessType === 'Salon & Barbers' || activeBusiness?.category === 'Salon' || activeBusiness?.businessType === 'Salon') && !isTravel;
-  const isFastFood = (activeBusiness?.category === 'Fast Food' || activeBusiness?.businessType === 'Fast Food') && !isSalon && !isTravel;
-  const isRestaurant = (activeBusiness?.category === 'Restaurant' || activeBusiness?.businessType === 'Restaurant') && !isFastFood && !isSalon && !isTravel;
-  const isLaundry = (activeBusiness?.category === 'Laundry Services' || activeBusiness?.businessType === 'Laundry Services') && !isSalon && !isTravel;
+  const currentArchetype = getIndustryArchetype(activeBusiness?.category, activeBusiness?.businessType);
+  const isTravel = currentArchetype === 'travel';
+  const isSalon = currentArchetype === 'salon';
+  const isFastFood = currentArchetype === 'fast_food';
+  const isRestaurant = currentArchetype === 'restaurant';
+  const isLaundry = currentArchetype === 'laundry';
+  const isPharmacy = currentArchetype === 'pharmacy';
+  const isServiceBusiness = currentArchetype === 'service';
 
   const SIDEBAR_ITEMS = isTravel ? [
     { name: 'Dashboard', icon: LayoutDashboard },
@@ -1049,6 +1081,27 @@ export default function App() {
     { name: 'Customers', icon: Users },
     { name: 'Suppliers', icon: Truck },
     { name: 'Reports', icon: FileText },
+    { name: 'Settings', icon: SettingsIcon },
+  ] : isPharmacy ? [
+    { name: 'Dashboard', icon: LayoutDashboard },
+    { name: 'POS', icon: Pill },
+    { name: 'Products', icon: Package },
+    { name: 'Inventory', icon: Package },
+    { name: 'Customers', icon: Users },
+    { name: 'Sales', icon: Receipt },
+    { name: 'Expenses', icon: TrendingDown },
+    { name: 'Reports', icon: TrendingUp },
+    { name: 'Employees', icon: Users },
+    { name: 'Settings', icon: SettingsIcon },
+  ] : isServiceBusiness ? [
+    { name: 'Dashboard', icon: LayoutDashboard },
+    { name: 'Services', icon: ClipboardList },
+    { name: 'POS', icon: ShoppingCart },
+    { name: 'Customers', icon: Users },
+    { name: 'Sales', icon: Receipt },
+    { name: 'Expenses', icon: TrendingDown },
+    { name: 'Reports', icon: TrendingUp },
+    { name: 'Employees', icon: Users },
     { name: 'Settings', icon: SettingsIcon },
   ] : [
     { name: 'Dashboard', icon: LayoutDashboard },
@@ -1566,6 +1619,30 @@ export default function App() {
                   }
                 }}
               />
+            ) : isPharmacy ? (
+              <PharmacyDashboard 
+                business={activeBusiness} 
+                user={currentUser} 
+                onNavigate={(tab) => {
+                  if (authorizedTabs.includes(tab)) {
+                    setActiveTab(tab);
+                  } else {
+                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                  }
+                }}
+              />
+            ) : isServiceBusiness ? (
+              <ServiceBusinessDashboard 
+                business={activeBusiness} 
+                user={currentUser} 
+                onNavigate={(tab) => {
+                  if (authorizedTabs.includes(tab)) {
+                    setActiveTab(tab);
+                  } else {
+                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                  }
+                }}
+              />
             ) : (
               <BusinessDashboard 
                 business={activeBusiness} 
@@ -1616,12 +1693,24 @@ export default function App() {
           )}
 
           {(activeTab === 'POS' || activeTab === 'Salon POS') && (
-            <POS 
-              business={activeBusiness} 
-              user={currentUser} 
-              onSaleComplete={triggerReload}
-              branchId={activeBranchFilterId}
-            />
+            isPharmacy ? (
+              <PharmacyPOS 
+                business={activeBusiness} 
+                user={currentUser} 
+                onNavigate={(tab) => {
+                  if (authorizedTabs.includes(tab)) {
+                    setActiveTab(tab);
+                  }
+                }}
+              />
+            ) : (
+              <POS 
+                business={activeBusiness} 
+                user={currentUser} 
+                onSaleComplete={triggerReload}
+                branchId={activeBranchFilterId}
+              />
+            )
           )}
 
           {(activeTab === 'Restaurant POS' || activeTab === 'POS Service') && (
@@ -2317,6 +2406,11 @@ export default function App() {
         onClose={() => setIsPopupNotifOpen(false)}
         onNavigateTab={(tab) => setActiveTab(tab)}
         onPayNow={handleExecutePayNowPayment}
+      />
+
+      <RegistrationPopupModal
+        business={activeBusiness}
+        onNavigateTab={(tab) => setActiveTab(tab)}
       />
 
       <ToastContainer />

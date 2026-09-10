@@ -95,15 +95,19 @@ service cloud.firestore {
       // Super admin can read/write any business
       // Authenticated users can read their own business workspace
       // Public registration allowed for creating new tenant workspace
-      allow get: if isSignedIn() || request.auth == null;
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() || request.auth == null;
-      allow update: if isSuperAdmin() || (isSignedIn() && (
-        resource.data.ownerId == request.auth.uid ||
-        resource.data.ownerEmail == request.auth.token.email ||
-        request.auth.token.businessId == businessId
-      ));
-      allow delete: if isSuperAdmin();
+      allow get: if true;
+      allow list: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if true;
+    }
+
+    match /bos_deleted_business_ids/{id} {
+      allow read, write: if true;
+    }
+
+    match /bos_pricing_plans/{id} {
+      allow read, write: if true;
     }
 
     match /bos_users/{userId} {

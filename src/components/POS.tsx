@@ -14,7 +14,7 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Percent, 
   DollarSign, Check, FileText, X, Sparkles, Building, UserCheck,
   Calendar, Phone, User as UserIcon, Clock, ClipboardList, CheckCircle, AlertCircle, RefreshCw,
-  Settings as SettingsIcon, Edit2, Trash, QrCode, Camera, Package
+  Settings as SettingsIcon, Edit2, Trash, QrCode, Camera, Package, Send, Loader2
 } from 'lucide-react';
 import { MobileScanner } from './MobileScanner';
 import { InAppMobileScannerModal } from './InAppMobileScannerModal';
@@ -41,6 +41,9 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
   // Checkout status / Active Invoice Receipt
   const [createdSale, setCreatedSale] = useState<Sale | null>(null);
   const [isReceiptCustomizing, setIsReceiptCustomizing] = useState(false);
+  const [smsReceiptPhone, setSmsReceiptPhone] = useState('');
+  const [isSendingSmsReceipt, setIsSendingSmsReceipt] = useState(false);
+  const [smsReceiptStatus, setSmsReceiptStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   // Local reload trigger for catalog template updates
   const [localReloadKey, setLocalReloadKey] = useState(0);
@@ -543,12 +546,47 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     });
 
     setCreatedSale(newSale);
+    setSmsReceiptPhone(customer?.phone || '');
+    setSmsReceiptStatus(null);
     setCart([]);
     setAmountReceived('');
     setDiscountPercent(0);
     setSelectedCustomerId('');
     alert('POS sale completed successfully! Invoice receipt generated.');
     onSaleComplete();
+  };
+
+  const handleSendSmsReceipt = async () => {
+    if (!createdSale) return;
+    const phone = smsReceiptPhone.trim() || customers.find(c => c.id === createdSale.customerId)?.phone;
+    if (!phone) {
+      alert('Please enter a recipient phone number (e.g. 0244123456).');
+      return;
+    }
+
+    setIsSendingSmsReceipt(true);
+    setSmsReceiptStatus(null);
+    try {
+      const itemsSummary = createdSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+      const msg = `${business.name}: Receipt #${createdSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(createdSale.total, createdSale.currency || business.currency)}. Thank you for your patronage!`;
+      
+      const res = await db.sendSms({
+        recipient: phone,
+        message: msg,
+        businessId: business.id,
+        type: 'receipt'
+      });
+
+      if (res.success) {
+        setSmsReceiptStatus({ success: true, message: `Receipt SMS sent successfully to ${phone}.` });
+      } else {
+        setSmsReceiptStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
+      }
+    } catch (err: any) {
+      setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
+    } finally {
+      setIsSendingSmsReceipt(false);
+    }
   };
 
   const handleUpdateReceiptConfig = (e: React.FormEvent) => {
@@ -1400,6 +1438,44 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
             </div>
 
             <div className="space-y-2">
+              {/* SMS Receipt Quick Dispatch */}
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                  <Send className="h-3.5 w-3.5 text-emerald-800" /> Send Instant SMS Receipt
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    value={smsReceiptPhone}
+                    onChange={e => setSmsReceiptPhone(e.target.value)}
+                    placeholder="Customer Phone (e.g. 0244123456)"
+                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <button
+                    onClick={handleSendSmsReceipt}
+                    disabled={isSendingSmsReceipt}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition shrink-0"
+                  >
+                    {isSendingSmsReceipt ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <span>Sending...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-3 w-3" />
+                        <span>Send</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                {smsReceiptStatus && (
+                  <p className={`text-[10px] font-semibold ${smsReceiptStatus.success ? 'text-emerald-800' : 'text-rose-600'}`}>
+                    {smsReceiptStatus.message}
+                  </p>
+                )}
+              </div>
+
               <button
                 onClick={handlePrintSaleReceipt}
                 className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"

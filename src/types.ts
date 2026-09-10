@@ -3,23 +3,113 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const REQUIRED_BUSINESS_TYPES = [
-  'Supermarket',
-  'Grocery Store',
-  'Phone Shop',
-  'Electronics Shop',
-  'Fashion Shop / Boutique',
-  'Pharmacy & Health',
-  'Restaurant / Food Business',
-  'Hardware Store',
-  'Salon & Barbers',
-  'Laundry Services',
-  'Professional Services',
-  'General Enterprise',
-  'Water & Drinks Distribution',
-  'Travel & Tour',
-  'School / Educational Institution'
+export interface IndustryGroup {
+  name: string;
+  types: string[];
+}
+
+export const BUSINESS_TYPE_GROUPS: IndustryGroup[] = [
+  {
+    name: 'Retail & General Businesses',
+    types: [
+      'General Retail',
+      'Supermarket',
+      'Mini Mart',
+      'Provision Store',
+      'Electronics & Appliances',
+      'Clothing & Fashion',
+      'Footwear',
+      'Mobile Phone & Accessories',
+      'Computer & IT Accessories',
+      'Hardware & Building Materials',
+      'Auto Parts',
+      'Furniture & Home Appliances',
+      'Stationery & Bookshop',
+      'Wholesale',
+      'Import & Distribution',
+      // Backward compatibility aliases
+      'Grocery Store',
+      'Phone Shop',
+      'Electronics Shop',
+      'Fashion Shop / Boutique',
+      'Hardware Store',
+      'Water & Drinks Distribution',
+      'General Enterprise'
+    ]
+  },
+  {
+    name: 'Food & Hospitality',
+    types: [
+      'Restaurant',
+      'Fast Food',
+      'Food & Beverage',
+      'Bakery',
+      'Catering',
+      'Grocery',
+      'Provision & Food Store',
+      'Restaurant / Food Business'
+    ]
+  },
+  {
+    name: 'Beauty & Personal Care',
+    types: [
+      'Beauty & Cosmetics',
+      'Beauty Salon',
+      'Hair Salon',
+      'Barber Shop',
+      'Spa & Wellness',
+      'Nail Salon',
+      'Makeup Artist',
+      'Skincare Business',
+      'Perfume & Fragrance',
+      'Salon & Barbers',
+      'Beauty & Wellness',
+      'Salon'
+    ]
+  },
+  {
+    name: 'Health',
+    types: [
+      'Pharmacy',
+      'Medical Supplies',
+      'Health & Wellness Store',
+      'Optical Shop',
+      'Pharmacy & Health'
+    ]
+  },
+  {
+    name: 'Services',
+    types: [
+      'Cleaning Services',
+      'Laundry & Dry Cleaning',
+      'Repair Services',
+      'Phone Repair',
+      'Computer Repair',
+      'Printing & Design',
+      'Photography',
+      'Event Services',
+      'Consultancy',
+      'Professional Services',
+      'Transportation & Logistics',
+      'Car Rental',
+      'Travel & Tours',
+      'Travel & Tour',
+      'Travel Agencies',
+      'Laundry Services',
+      'School / Educational Institution'
+    ]
+  },
+  {
+    name: 'Other',
+    types: [
+      'Other Business'
+    ]
+  }
 ];
+
+export const REQUIRED_BUSINESS_TYPES = Array.from(
+  new Set(BUSINESS_TYPE_GROUPS.flatMap(g => g.types))
+);
 
 export interface Business {
   id: string;
@@ -40,7 +130,12 @@ export interface Business {
   currency?: string; // e.g. 'GHC', 'USD', 'GBP', 'EUR'
   taxId?: string; // tax registration number
   isStockTransferEnabled?: boolean; // Control for Inter-Branch stock transfers
+  smsEnabled?: boolean; // Super Admin per-business SMS control (default: true)
+  pricingPlanId?: string; // Assigned pricing plan ID
   subscriptionAmount?: number; // Custom per-business monthly subscription amount in GHS
+  priceUpdatedAt?: string; // Timestamp when Super Admin last set/updated the price
+  priceUpdatedBy?: string; // Who updated the pricing (e.g. 'Super Admin')
+  updatedAt?: string; // Last update timestamp
   receiptConfig: {
     logoUrl?: string;
     businessName?: string;
@@ -91,6 +186,47 @@ export interface User {
   branchIds?: string[]; // Multiple branch assignments for roles like manager
 }
 
+export interface PharmacyBatch {
+  id: string;
+  productId: string;
+  businessId: string;
+  batchNumber: string;
+  expiryDate: string; // YYYY-MM-DD or ISO
+  quantity: number;
+  costPrice?: number;
+  sellingPrice?: number;
+  supplier?: string;
+  createdAt: string;
+}
+
+export interface Prescription {
+  id: string;
+  businessId: string;
+  prescriptionNumber: string;
+  patientId?: string;
+  patientName: string;
+  patientPhone?: string;
+  doctorName: string;
+  clinicOrHospital?: string;
+  prescribedDate: string;
+  diagnosisNotes?: string;
+  status: 'Pending' | 'Dispensed' | 'Cancelled';
+  medicines: {
+    productId?: string;
+    medicineName: string;
+    dosage?: string;
+    frequency?: string;
+    duration?: string;
+    quantity: number;
+    batchNumber?: string;
+  }[];
+  saleId?: string;
+  dispensedAt?: string;
+  dispensedBy?: string;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface Product {
   id: string;
   businessId: string;
@@ -131,6 +267,19 @@ export interface Product {
   status?: 'Active' | 'Draft' | 'Discontinued' | 'Inactive'; // Product status
   barcodeOptional?: string; // Optional barcode
   updatedAt?: string; // Last updated timestamp
+  // Pharmacy & Health specialized fields
+  genericName?: string;
+  dosageForm?: string; // e.g. Tablets, Capsules, Syrup, Cream, Ointment, Drops, Injection, Powder, Suppository, Other
+  strength?: string; // e.g. 500mg, 10mg/5ml
+  packSize?: string; // e.g. Pack of 30, Bottle 100ml
+  requiresPrescription?: boolean;
+  batches?: PharmacyBatch[];
+  // Beauty & Personal Care specialized fields
+  shade?: string;
+  color?: string;
+  size?: string;
+  fragrance?: string;
+  volume?: string;
 }
 
 export interface Service {
@@ -154,13 +303,15 @@ export interface Customer {
   id: string;
   businessId: string;
   name: string;
-  email: string;
+  email?: string;
   phone: string;
-  balance: number;
+  balance?: number;
   createdAt: string;
   profileImage?: string;
   notes?: string;
   preferences?: string;
+  totalSpent?: number;
+  visitCount?: number;
 }
 
 export interface CartItem {
@@ -186,18 +337,23 @@ export interface Sale {
     price: number;
     quantity: number;
   }[];
-  subtotal: number;
+  subtotal?: number;
   discount: number; // percentage or fixed
   total: number;
   paymentMethod: 'cash' | 'card' | 'mobile' | 'other';
+  paymentStatus?: 'paid' | 'partial' | 'pending' | 'unpaid';
+  amountPaid?: number;
   amountReceived?: number;
   change?: number;
   customerId?: string;
   customerName?: string;
-  employeeId: string;
-  employeeName: string;
+  customerPhone?: string;
+  employeeId?: string;
+  employeeName?: string;
+  cashierName?: string;
+  notes?: string;
   createdAt: string;
-  status: 'completed' | 'refunded';
+  status?: 'completed' | 'refunded';
   currency?: string;
 }
 
@@ -330,24 +486,32 @@ export interface BusinessDeleteAuditLog {
 
 export interface ProfessionalServiceJob {
   id: string; // e.g., SRV-12345
+  jobNumber?: string;
+  title?: string;
   businessId: string;
   branchId?: string;
   customerName: string;
   customerPhone: string;
-  serviceName: string;
-  serviceDescription: string;
-  serviceCategory: string;
-  assignedEmployeeId: string;
-  assignedEmployeeName: string;
-  servicePrice: number;
+  serviceName?: string;
+  serviceDescription?: string;
+  description?: string;
+  serviceCategory?: string;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  assignedStaffName?: string;
+  servicePrice?: number;
+  totalPrice?: number;
+  amountPaid?: number;
   quantity?: number;
-  startDate: string;
+  startDate?: string;
+  scheduledDate?: string;
   expectedCompletionDate?: string;
   customerNotes?: string;
-  paymentMethod: 'cash' | 'card' | 'mobile' | 'other';
+  paymentMethod?: 'cash' | 'card' | 'mobile' | 'other';
   paymentStatus: 'paid' | 'unpaid';
-  status: 'pending' | 'completed';
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string;
   completedByEmployeeId?: string;
   completedByEmployeeName?: string;
@@ -1161,6 +1325,35 @@ export interface WhatsAppSettings {
   updatedAt?: string;
   updatedBy?: string;
 }
+
+export interface SmsTimingDetails {
+  clientTriggerTime?: number;
+  backendReceivedTime?: number;
+  arkeselRequestStartTime?: number;
+  arkeselResponseTime?: number;
+  submissionCompletionTime?: number;
+  arkeselLatencyMs?: number;
+  totalSubmissionMs?: number;
+}
+
+export interface BusinessPopupPrompt {
+  id: string;
+  title: string;
+  message: string;
+  daysAfterRegistration: number; // 5 to 30 days
+  targetType: 'all' | 'selected';
+  targetBusinessIds?: string[];
+  status: 'active' | 'inactive';
+  category?: 'onboarding' | 'subscription' | 'promotional' | 'announcement' | 'instructional';
+  actionButtonText?: string;
+  actionUrlOrTab?: string;
+  allowRepeatDisplay?: boolean;
+  expirationDate?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByName?: string;
+}
+
 
 
 

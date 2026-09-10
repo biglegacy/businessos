@@ -87,6 +87,20 @@
         "destination": { "type": "string" },
         "totalAmount": { "type": "number" }
       }
+    },
+    "bos_prescriptions": {
+      "title": "Pharmacy Prescriptions",
+      "description": "Prescription records linked to patient sales and medicines",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "prescriptionNumber": { "type": "string" },
+        "patientName": { "type": "string" },
+        "doctorName": { "type": "string" },
+        "status": { "type": "string" },
+        "prescribedDate": { "type": "string" }
+      }
     }
   },
   "firestore": {
@@ -117,6 +131,10 @@
     "bos_travel_bookings/{bookingId}": {
       "schema": { "$ref": "#/entities/bos_travel_bookings" },
       "description": "Collection of travel bookings"
+    },
+    "bos_prescriptions/{prescriptionId}": {
+      "schema": { "$ref": "#/entities/bos_prescriptions" },
+      "description": "Collection of prescription records"
     }
   }
 }
