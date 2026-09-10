@@ -970,3 +970,5 @@ export function getSidebarItemsForArchetype(archetype: IndustryArchetype): { nam
       ];
   }
 }
+
+export default getIndustryArchetype;

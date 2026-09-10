@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export { getIndustryArchetype, type IndustryArchetype } from './lib/businessType';
+
 export interface IndustryGroup {
   name: string;
   types: string[];
