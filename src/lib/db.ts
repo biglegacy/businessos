@@ -2693,9 +2693,49 @@ class CloudDatabase {
       if (res.ok && data.success) {
         return data;
       }
-      return { success: false, message: data.error || 'Failed to save SMS settings' };
+      return { success: false, message: data.message || data.error || '✕ Failed to save Arkesel SMS settings. Please try again.' };
     } catch (err: any) {
-      return { success: false, message: err.message || 'Network error saving SMS settings' };
+      return { success: false, message: '✕ Failed to save Arkesel SMS settings. Please try again.' };
+    }
+  }
+
+  public async testSmsConnection(apiKey?: string): Promise<{
+    success: boolean;
+    message: string;
+    balance?: any;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/sms/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey })
+      });
+      const data = await res.json();
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+        error: err.message
+      };
+    }
+  }
+
+  public async toggleGlobalSms(isEnabled: boolean): Promise<{
+    success: boolean;
+    isEnabled: boolean;
+    message?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/sms-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isEnabled })
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, isEnabled: !isEnabled };
     }
   }
 

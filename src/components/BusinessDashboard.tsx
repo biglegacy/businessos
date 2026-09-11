@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { db, getCurrencySymbol, formatCurrency } from '../lib/db';
 import { User, Business } from '../types';
 import { 
   DollarSign, Package, AlertTriangle, ArrowUpRight, 
   TrendingUp, TrendingDown, ShoppingBag, Plus, Sparkles,
   FileDown, Calendar, CreditCard, Layers, BarChart3, Database, ChevronRight,
-  Truck, Users, Settings, Receipt, PlusCircle
+  Truck, Users, Settings, Receipt, PlusCircle, ArrowDownLeft,
+  ShoppingCart, Store, Building2, Bell, CheckCircle2, Clock
 } from 'lucide-react';
-import { QuickActionPathways } from './QuickActionPathways';
 import { 
   exportSalesToCSV, 
   exportProductsToCSV, 
@@ -29,32 +29,39 @@ interface BusinessDashboardProps {
 
 export function BusinessDashboard({ business, user, onNavigate }: BusinessDashboardProps) {
   const isOwnerOrAdmin = ['owner', 'admin', 'SUPER_ADMIN'].includes(user.role);
+  const isManager = user.role === 'manager';
   const initialBranchId = isOwnerOrAdmin ? 'All' : (user.branchId || 'All');
   const [dashboardBranchId, setDashboardBranchId] = useState<string>(initialBranchId);
 
   const branches = db.getBranches(business.id);
 
-  // Fetch isolated tenant data
+  // Fetch isolated tenant data directly from source of truth
   const rawProducts = db.getProducts(business.id);
   const services = db.getServices(business.id);
   const rawSales = db.getSales(business.id).filter(s => s.status === 'completed');
   const rawExpenses = db.getExpenses(business.id);
+  const rawCustomers = db.getCustomers(business.id);
 
   const products = rawProducts.filter(p => dashboardBranchId === 'All' || p.branchId === dashboardBranchId);
   const sales = rawSales.filter(s => dashboardBranchId === 'All' || s.branchId === dashboardBranchId);
   const expenses = rawExpenses.filter(e => dashboardBranchId === 'All' || e.branchId === dashboardBranchId);
 
+  // Receivables computation (debts owed by customers)
+  const debtors = rawCustomers.filter(c => c.balance < 0);
+  const totalReceivables = debtors.reduce((sum, c) => sum + Math.abs(c.balance), 0);
+  const debtorCount = debtors.length;
+
   // States for interactive charts
   const [chartTimeframe, setChartTimeframe] = useState<'7days' | '6months'>('7days');
   const [hoveredBar, setHoveredBar] = useState<{ index: number; type: 'revenue' | 'expense'; value: number; label: string } | null>(null);
 
-  // Calculate metrics
+  // Calculate metrics for today
   const todayStr = new Date().toISOString().split('T')[0];
   const todaySales = sales.filter(s => s.createdAt.startsWith(todayStr));
   const todaySalesSum = todaySales.reduce((acc, curr) => acc + curr.total, 0);
+  const todaySalesCount = todaySales.length;
   
   const totalSalesSum = sales.reduce((acc, curr) => acc + curr.total, 0);
-  const totalIncomeSum = totalSalesSum; // Total Income corresponds to Total Sales
   const totalExpensesSum = expenses.reduce((acc, curr) => acc + curr.amount, 0);
 
   // Calculate COGS (Cost of Goods Sold)
@@ -69,9 +76,6 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
       }
     });
   });
-
-  const grossProfit = totalSalesSum - totalCOGS;
-  const netProfit = grossProfit - totalExpensesSum;
 
   // Helper for periodic profit calculations
   const getProfitForPeriod = (days: number) => {
@@ -106,17 +110,18 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
 
   const todayProfit = getProfitForPeriod(1);
   const weeklyProfit = getProfitForPeriod(7);
-  const monthlyProfit = getProfitForPeriod(30);
-  const yearlyProfit = getProfitForPeriod(365);
 
   const lowStockItems = products.filter(p => {
     const threshold = typeof p.lowStockThreshold === 'number' ? p.lowStockThreshold : 5;
     return p.stockQuantity <= threshold;
   });
 
+  // Permissions
+  const canAccessReceivables = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'accountant'].includes(user.role);
+  const canAddProduct = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'inventory_staff'].includes(user.role);
+  const canManageCustomers = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'cashier'].includes(user.role);
+
   // --- CHART COMPUTATIONS ---
-  
-  // 1. Weekly Chart Data (Last 7 Days)
   const last7Days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - i);
@@ -140,7 +145,6 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
     return { label, revenue, expense, key: dateStr };
   });
 
-  // 2. Monthly Chart Data (Last 6 Months)
   const monthlyChartData = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
     d.setMonth(d.getMonth() - i);
@@ -175,77 +179,44 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
   const activeChartData = chartTimeframe === '7days' ? weeklyChartData : monthlyChartDataComputed;
   const maxVal = Math.max(...activeChartData.map(d => Math.max(d.revenue, d.expense)), 100);
 
-  // 3. Category Sales breakdown
-  const categoryRevenueMap: Record<string, number> = {};
-  let totalCategorySales = 0;
-  sales.forEach(s => {
-    s.items.forEach(item => {
-      let cat = 'Other';
-      if (item.type === 'product') {
-        const p = products.find(prod => prod.id === item.itemId);
-        if (p) cat = p.category;
-      } else {
-        const serv = services.find(sv => sv.id === item.itemId);
-        if (serv) cat = serv.category;
-      }
-      categoryRevenueMap[cat] = (categoryRevenueMap[cat] || 0) + (item.price * item.quantity);
-      totalCategorySales += (item.price * item.quantity);
-    });
-  });
-
-  const topCategories = Object.entries(categoryRevenueMap)
-    .map(([category, amount]) => ({
-      category,
-      amount,
-      percentage: totalCategorySales > 0 ? (amount / totalCategorySales) * 100 : 0
-    }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 5);
-
-  // 4. Payment method split
-  const paymentMethodTotals = {
-    cash: 0,
-    card: 0,
-    mobile: 0,
-    other: 0
-  };
-  sales.forEach(s => {
-    if (paymentMethodTotals[s.paymentMethod] !== undefined) {
-      paymentMethodTotals[s.paymentMethod] += s.total;
-    }
-  });
-  const totalPaymentSum = Object.values(paymentMethodTotals).reduce((a, b) => a + b, 0);
-
   return (
-    <div className="space-y-8 font-sans">
-      {/* Welcome Banner */}
-      <div className="bg-gradient-to-br from-[#064E3B] to-[#032e23] rounded-3xl p-8 text-white relative overflow-hidden shadow-sm">
-        <div className="absolute top-0 right-0 p-8 opacity-5">
-          <Sparkles className="h-48 w-48 text-white rotate-12" />
+    <div className="space-y-6 font-sans max-w-7xl mx-auto pb-24 md:pb-10">
+      {/* 1. Mobile & Tablet Welcome Card - Clean Blue Theme */}
+      <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl p-5 sm:p-7 text-white relative overflow-hidden shadow-sm">
+        <div className="absolute -right-10 -bottom-10 opacity-10 pointer-events-none">
+          <Store className="w-64 h-64 text-white" />
         </div>
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-3">
-            <span className="px-3 py-1 rounded-full bg-emerald-800/80 text-emerald-300 text-[10px] font-bold tracking-widest uppercase border border-emerald-700/30">
-              Authorized Work Session
-            </span>
-            <h2 className="text-3xl font-bold tracking-tight">
+
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-500/40 text-blue-100 text-[10px] font-bold tracking-wider uppercase border border-blue-400/30">
+                {business.category || business.businessType || 'Enterprise'}
+              </span>
+              <span className="text-[10px] font-mono text-blue-200">
+                BOS-{business.id.slice(2).toUpperCase()}
+              </span>
+            </div>
+
+            <h2 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight leading-tight">
               Welcome back, {user.name}
             </h2>
-            <p className="text-emerald-100/90 max-w-xl text-sm leading-relaxed">
-              You are managing <strong className="text-white font-semibold">{business.name}</strong> as an authorized <span className="underline decoration-emerald-500 underline-offset-4 font-bold uppercase text-emerald-400">{user.role}</span>. All operations are isolated and secured under Business ID: <code className="bg-emerald-950/40 px-2 py-0.5 rounded text-xs font-mono text-emerald-200">BOS-{business.id.slice(2).toUpperCase()}</code>.
+
+            <p className="text-blue-100 text-xs sm:text-sm max-w-xl leading-relaxed">
+              Operating <strong className="text-white">{business.name}</strong> as <span className="uppercase font-bold text-blue-200">{user.role}</span>.
             </p>
           </div>
 
           {/* Branch filter dropdown for owner/admin */}
-          {['owner', 'admin', 'SUPER_ADMIN'].includes(user.role) && branches.length > 0 && (
-            <div className="bg-emerald-950/40 p-4 rounded-2xl border border-emerald-700/20 backdrop-blur-sm shrink-0 min-w-[200px] space-y-2">
-              <label className="block text-[10px] font-bold text-emerald-300 uppercase tracking-wider">
-                Select View / Branch
+          {isOwnerOrAdmin && branches.length > 0 && (
+            <div className="bg-blue-800/40 p-3 sm:p-4 rounded-2xl border border-blue-400/20 backdrop-blur-sm shrink-0 min-w-[200px] space-y-1.5">
+              <label className="block text-[10px] font-bold text-blue-200 uppercase tracking-wider">
+                Store Branch
               </label>
               <select
                 value={dashboardBranchId}
                 onChange={(e) => setDashboardBranchId(e.target.value)}
-                className="block w-full px-3 py-2 bg-emerald-900 border border-emerald-700/50 rounded-xl text-xs text-white font-bold cursor-pointer transition focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                className="block w-full px-3 py-2 bg-blue-900/80 border border-blue-400/40 rounded-xl text-xs text-white font-bold cursor-pointer transition focus:ring-1 focus:ring-blue-300 focus:outline-none"
               >
                 <option value="All">All Branches (Consolidated)</option>
                 {branches.map(b => (
@@ -254,149 +225,313 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
               </select>
             </div>
           )}
-
-          {!['owner', 'admin', 'SUPER_ADMIN'].includes(user.role) && user.branchId && (
-            <div className="bg-emerald-950/40 p-4 rounded-2xl border border-emerald-700/20 backdrop-blur-sm shrink-0">
-              <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider block mb-1">Assigned Branch</span>
-              <span className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Layers className="h-4 w-4 text-emerald-400" />
-                {branches.find(b => b.id === user.branchId)?.name || 'Local Branch'}
-              </span>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Quick Action Pathways */}
-      <QuickActionPathways business={business} onNavigate={onNavigate} />
-
-      {/* Primary KPI Indicators */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-widest flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-[#064E3B]" /> Comprehensive Financial Indicators
+      {/* 2. QUICK ACTIONS SECTION - Large Touch-Friendly Buttons */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+            Quick Actions
           </h3>
-          <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">
-            Live Calculations
+          <span className="text-[10px] text-slate-400 font-medium hidden sm:inline">
+            Tap to open action
           </span>
         </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-          {/* 1. Total Sales */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Sales</p>
-                <h3 className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(totalSalesSum, business.currency)}</h3>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
+          {/* New Sale (POS) */}
+          <button
+            onClick={() => onNavigate('POS')}
+            className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+          >
+            <div className="h-11 w-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform">
+              <ShoppingCart className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">New Sale</p>
+              <p className="text-[10px] text-slate-400">POS Checkout</p>
+            </div>
+          </button>
+
+          {/* Add Product */}
+          {canAddProduct && (
+            <button
+              onClick={() => onNavigate('Products')}
+              className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+            >
+              <div className="h-11 w-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 group-hover:scale-105 transition-transform">
+                <PlusCircle className="h-5 w-5" />
               </div>
-              <div className="h-10 w-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center border border-emerald-100">
+              <div>
+                <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">Add Product</p>
+                <p className="text-[10px] text-slate-400">Stock Catalog</p>
+              </div>
+            </button>
+          )}
+
+          {/* View Sales */}
+          <button
+            onClick={() => onNavigate('Sales')}
+            className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+          >
+            <div className="h-11 w-11 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center border border-sky-100 group-hover:scale-105 transition-transform">
+              <Receipt className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">View Sales</p>
+              <p className="text-[10px] text-slate-400">Receipts & Logs</p>
+            </div>
+          </button>
+
+          {/* Add Customer */}
+          {canManageCustomers && (
+            <button
+              onClick={() => onNavigate('Customers')}
+              className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+            >
+              <div className="h-11 w-11 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 group-hover:scale-105 transition-transform">
+                <Users className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">Customers</p>
+                <p className="text-[10px] text-slate-400">Directory & CRM</p>
+              </div>
+            </button>
+          )}
+
+          {/* Receive Payment / Debts */}
+          {canAccessReceivables && (
+            <button
+              onClick={() => onNavigate('Accounts Receivable')}
+              className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+            >
+              <div className="h-11 w-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 group-hover:scale-105 transition-transform">
+                <ArrowDownLeft className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">Receive Payment</p>
+                <p className="text-[10px] text-slate-400">Settle Debts</p>
+              </div>
+            </button>
+          )}
+
+          {/* View Receivables */}
+          {canAccessReceivables && (
+            <button
+              onClick={() => onNavigate('Accounts Receivable')}
+              className="p-4 bg-white hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-2xl shadow-xs hover:shadow-sm flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer group active:scale-95 min-h-[96px]"
+            >
+              <div className="h-11 w-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100 group-hover:scale-105 transition-transform">
+                <CreditCard className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600">Receivables</p>
+                <p className="text-[10px] text-slate-400">Track Balances</p>
+              </div>
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* 3. PRIMARY BUSINESS METRICS (5 RESPONSIVE CARDS) */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+            Today's Business Overview
+          </h3>
+          <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+            Live Records
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+          {/* 1. Today's Sales */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today's Sales</span>
+                <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                  {formatCurrency(todaySalesSum, business.currency)}
+                </p>
+              </div>
+              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
                 <ShoppingBag className="h-5 w-5" />
               </div>
             </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span>{sales.length} transactions</span>
-              <button onClick={() => onNavigate('POS')} className="font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-0.5">
-                POS Terminal <ArrowUpRight className="h-3 w-3" />
+
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              {todaySalesCount > 0 ? (
+                <>
+                  <span className="text-slate-500 font-medium">{todaySalesCount} orders today</span>
+                  <button 
+                    onClick={() => onNavigate('Sales')}
+                    className="font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5"
+                  >
+                    View <ArrowUpRight className="h-3 w-3" />
+                  </button>
+                </>
+              ) : (
+                <span className="text-slate-400 font-medium italic">No sales yet today</span>
+              )}
+            </div>
+          </div>
+
+          {/* 2. Number of Transactions */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Transactions</span>
+                <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                  {todaySalesCount}
+                </p>
+              </div>
+              <div className="p-2.5 bg-sky-50 text-sky-600 rounded-xl">
+                <Receipt className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">All-time: {sales.length}</span>
+              <button 
+                onClick={() => onNavigate('POS')}
+                className="font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5"
+              >
+                Checkout <ArrowUpRight className="h-3 w-3" />
               </button>
             </div>
           </div>
 
-          {/* 2. Total Income */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+          {/* 3. Products / Stock */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
             <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Income</p>
-                <h3 className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(totalIncomeSum, business.currency)}</h3>
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Catalog & Stock</span>
+                <p className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                  {products.length} <span className="text-xs font-semibold text-slate-400">Items</span>
+                </p>
               </div>
-              <div className="h-10 w-10 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-center border border-emerald-100">
+              <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Package className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              {lowStockItems.length > 0 ? (
+                <span className="text-amber-600 font-bold flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                  {lowStockItems.length} low stock
+                </span>
+              ) : (
+                <span className="text-emerald-600 font-bold flex items-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Healthy stock
+                </span>
+              )}
+              {canAddProduct && (
+                <button 
+                  onClick={() => onNavigate('Products')}
+                  className="font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5"
+                >
+                  Manage <ArrowUpRight className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 4. Outstanding Receivables */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Receivables</span>
+                <p className="text-xl sm:text-2xl font-black text-rose-600 mt-1">
+                  {formatCurrency(totalReceivables, business.currency)}
+                </p>
+              </div>
+              <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl">
+                <CreditCard className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">
+                {debtorCount > 0 ? `${debtorCount} customers owe` : 'All tabs settled'}
+              </span>
+              {canAccessReceivables && (
+                <button 
+                  onClick={() => onNavigate('Accounts Receivable')}
+                  className="font-bold text-rose-600 hover:text-rose-700 flex items-center gap-0.5"
+                >
+                  Collect <ArrowUpRight className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 5. Today's Profit */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today's Profit</span>
+                <p className={`text-xl sm:text-2xl font-black mt-1 ${todayProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {formatCurrency(todayProfit, business.currency)}
+                </p>
+              </div>
+              <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
                 <TrendingUp className="h-5 w-5" />
               </div>
             </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Consolidated Receipts</span>
-              <span className="text-emerald-600 font-bold flex items-center gap-0.5">
-                <TrendingUp className="h-3.5 w-3.5" /> 100% Verified
+
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">Net daily margin</span>
+              <span className="text-slate-400 font-mono text-[11px]">
+                {todaySalesCount > 0 ? `${formatCurrency(weeklyProfit, business.currency)} (7d)` : '—'}
               </span>
-            </div>
-          </div>
-
-          {/* 3. Total Expenses */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Expenses</p>
-                <h3 className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(totalExpensesSum, business.currency)}</h3>
-              </div>
-              <div className="h-10 w-10 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center border border-rose-100">
-                <TrendingDown className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span>{expenses.length} ledger logs</span>
-              <button onClick={() => onNavigate('Expenses')} className="font-bold text-rose-600 hover:text-rose-700 flex items-center gap-0.5">
-                Expenses Ledger <Plus className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
-
-          {/* 4. Today's Profit */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today's Profit</p>
-                <h3 className={`text-2xl font-bold mt-1 ${todayProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {formatCurrency(todayProfit, business.currency)}
-                </h3>
-              </div>
-              <div className="h-10 w-10 bg-sky-50 text-sky-600 rounded-xl flex items-center justify-center border border-sky-100">
-                <Calendar className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Last 24 Hours</span>
-              <span className="text-slate-400 font-medium">Daily summary</span>
-            </div>
-          </div>
-
-          {/* 5. Weekly Profit */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Weekly Profit</p>
-                <h3 className={`text-2xl font-bold mt-1 ${weeklyProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {formatCurrency(weeklyProfit, business.currency)}
-                </h3>
-              </div>
-              <div className="h-10 w-10 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center border border-purple-100">
-                <BarChart3 className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Last 7 Days</span>
-              <span className="text-slate-400 font-medium">Weekly summary</span>
             </div>
           </div>
         </div>
       </section>
 
-      {/* INTERACTIVE ANALYTICS CHARTS SECTION */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* 4. Empty State for Today's Sales if 0 */}
+      {todaySalesCount === 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 text-center shadow-xs">
+          <div className="h-12 w-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3">
+            <ShoppingCart className="h-6 w-6" />
+          </div>
+          <h4 className="text-sm sm:text-base font-bold text-slate-800">
+            No sales yet today
+          </h4>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
+            Start a new transaction at the point of sale terminal to record your first checkout.
+          </p>
+          <button
+            onClick={() => onNavigate('POS')}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            <span>Open POS Terminal</span>
+          </button>
+        </div>
+      )}
+
+      {/* 5. INTERACTIVE ANALYTICS CHARTS SECTION */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* SVG Grouped Column Chart */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between relative overflow-hidden">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 mb-4 select-none">
-            <div className="space-y-1">
-              <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <BarChart3 className="h-5 w-5 text-emerald-700" /> Financial Performance Curve
+        <div className="lg:col-span-2 bg-white p-5 sm:p-6 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 mb-4 select-none">
+            <div>
+              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <BarChart3 className="h-4 w-4 text-blue-600" /> Revenue & Expenses
               </h4>
-              <p className="text-xs text-slate-400">Comparing gross cashflow income against operational ledger costs</p>
+              <p className="text-xs text-slate-400">Comparing gross cashflow income against expenses</p>
             </div>
             
             {/* Chart controls */}
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
               <button
                 onClick={() => setChartTimeframe('7days')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                  chartTimeframe === '7days' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  chartTimeframe === '7days' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 7 Days
@@ -404,7 +539,7 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
               <button
                 onClick={() => setChartTimeframe('6months')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                  chartTimeframe === '6months' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  chartTimeframe === '6months' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 6 Months
@@ -415,21 +550,21 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
           {/* Interactive Tooltip Display */}
           <div className="h-8 mb-2 flex items-center justify-between select-none px-2">
             {hoveredBar ? (
-              <div className="text-xs flex items-center gap-3 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full">
+              <div className="text-xs flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full">
                 <span className="font-bold text-slate-700">{hoveredBar.label}</span>
                 <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-                <span className={`font-bold flex items-center gap-1 ${hoveredBar.type === 'revenue' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <span className={`font-bold ${hoveredBar.type === 'revenue' ? 'text-blue-600' : 'text-rose-600'}`}>
                   {hoveredBar.type.toUpperCase()}: {formatCurrency(hoveredBar.value, business.currency)}
                 </span>
               </div>
             ) : (
-              <p className="text-[11px] text-slate-400 font-medium">Hover over the bars to inspect granular statistics</p>
+              <p className="text-[11px] text-slate-400 font-medium">Tap or hover over bars to view values</p>
             )}
 
             {/* Legends */}
             <div className="flex gap-4 text-[10px] font-bold">
-              <span className="flex items-center gap-1.5 text-emerald-700">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" /> Revenue
+              <span className="flex items-center gap-1.5 text-blue-700">
+                <span className="h-2 w-2 rounded-full bg-blue-600" /> Revenue
               </span>
               <span className="flex items-center gap-1.5 text-rose-700">
                 <span className="h-2 w-2 rounded-full bg-rose-500" /> Expenses
@@ -438,21 +573,18 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
           </div>
 
           {/* Responsive SVG Container */}
-          <div className="relative flex-1 min-h-[220px]">
+          <div className="relative flex-1 min-h-[200px]">
             <svg viewBox="0 0 600 220" className="w-full h-full overflow-visible">
-              {/* Grid Lines */}
               <line x1="40" y1="20" x2="580" y2="20" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
               <line x1="40" y1="70" x2="580" y2="70" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
               <line x1="40" y1="120" x2="580" y2="120" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
               <line x1="40" y1="170" x2="580" y2="170" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
               <line x1="40" y1="190" x2="580" y2="190" stroke="#E2E8F0" strokeWidth="1.5" />
 
-              {/* Y-Axis Scales */}
               <text x="32" y="24" textAnchor="end" fill="#94A3B8" className="text-[9px] font-bold font-mono">{getCurrencySymbol(business.currency)} {(maxVal).toFixed(0)}</text>
               <text x="32" y="104" textAnchor="end" fill="#94A3B8" className="text-[9px] font-bold font-mono">{getCurrencySymbol(business.currency)} {(maxVal / 2).toFixed(0)}</text>
               <text x="32" y="194" textAnchor="end" fill="#94A3B8" className="text-[9px] font-bold font-mono">{getCurrencySymbol(business.currency)} 0</text>
 
-              {/* Dynamic Columns */}
               {activeChartData.map((data, idx) => {
                 const totalPoints = activeChartData.length;
                 const columnSpacing = 540 / totalPoints;
@@ -467,14 +599,13 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
 
                 return (
                   <g key={data.key || idx}>
-                    {/* Hover hotspot group */}
                     <rect
                       x={groupCenterX - columnSpacing / 2}
                       y="10"
                       width={columnSpacing}
                       height="180"
                       fill="transparent"
-                      className="hover:fill-slate-50/20 transition-colors duration-150 cursor-pointer"
+                      className="hover:fill-slate-50/40 transition-colors duration-150 cursor-pointer"
                     />
 
                     {/* Revenue Bar */}
@@ -484,7 +615,7 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
                       width={barWidth}
                       height={Math.max(revHeight, 2)}
                       rx="3"
-                      fill={hoveredBar?.index === idx && hoveredBar?.type === 'revenue' ? '#047857' : '#10B981'}
+                      fill={hoveredBar?.index === idx && hoveredBar?.type === 'revenue' ? '#1D4ED8' : '#2563EB'}
                       className="transition duration-150 cursor-pointer"
                       onMouseEnter={() => setHoveredBar({ index: idx, type: 'revenue', value: data.revenue, label: data.label })}
                       onMouseLeave={() => setHoveredBar(null)}
@@ -503,7 +634,6 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
                       onMouseLeave={() => setHoveredBar(null)}
                     />
 
-                    {/* X-Axis labels */}
                     <text
                       x={groupCenterX}
                       y="210"
@@ -520,286 +650,99 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
           </div>
         </div>
 
-        {/* Right Column: Categories Breakdown & Payment Share */}
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between space-y-6">
-          {/* Top Categories Progress list */}
-          <div className="space-y-4">
-            <div className="pb-3 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Layers className="h-4.5 w-4.5 text-indigo-600" /> Top Sales Categories
+        {/* Low Stock Safeguard Card */}
+        <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4 text-amber-500" /> Low Stock Alerts
               </h4>
-              <span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                Sales Density
+              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                {lowStockItems.length} Critical
               </span>
             </div>
 
-            <div className="space-y-3">
-              {topCategories.map((cat, idx) => {
-                const colorMap = [
-                  'bg-emerald-500',
-                  'bg-indigo-500',
-                  'bg-amber-500',
-                  'bg-rose-500',
-                  'bg-slate-500'
-                ];
-                const activeColor = colorMap[idx % colorMap.length];
-
-                return (
-                  <div key={cat.category || idx} className="space-y-1.5">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-bold text-slate-700 truncate max-w-[120px]">{cat.category}</span>
-                      <div className="space-x-1.5 font-mono text-[10px] text-slate-400">
-                        <span className="font-bold text-slate-800">{formatCurrency(cat.amount, business.currency)}</span>
-                        <span>&bull;</span>
-                        <span>{cat.percentage.toFixed(0)}%</span>
-                      </div>
+            {lowStockItems.length > 0 ? (
+              <div className="divide-y divide-slate-100 mt-2 max-h-64 overflow-y-auto">
+                {lowStockItems.slice(0, 5).map(item => (
+                  <div key={item.id} className="py-2.5 flex justify-between items-center text-xs">
+                    <div className="min-w-0 pr-2">
+                      <p className="font-bold text-slate-800 truncate">{item.name}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        Price: {formatCurrency(item.sellingPrice, business.currency)}
+                      </p>
                     </div>
-                    {/* Track progress container */}
-                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full ${activeColor} rounded-full transition-all duration-500`}
-                        style={{ width: `${cat.percentage}%` }}
-                      />
+                    <div className="text-right shrink-0">
+                      <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-bold text-[10px] border border-amber-100">
+                        {item.stockQuantity} left
+                      </span>
                     </div>
                   </div>
-                );
-              })}
-
-              {topCategories.length === 0 && (
-                <div className="py-8 text-center text-slate-400 text-xs">
-                  No products or services have been purchased yet to calculate distribution.
-                </div>
-              )}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-12 text-center text-slate-400 text-xs">
+                <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
+                <p className="font-bold text-slate-700">All products in stock</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">No immediate restock required.</p>
+              </div>
+            )}
           </div>
 
-          {/* Payment Method Split */}
-          <div className="space-y-4 border-t border-slate-100 pt-4">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-              <CreditCard className="h-4.5 w-4.5 text-emerald-700" /> Payment Channel Split
-            </h4>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              {(['cash', 'card', 'mobile', 'other'] as const).map(method => {
-                const total = paymentMethodTotals[method];
-                const percent = totalPaymentSum > 0 ? (total / totalPaymentSum) * 100 : 0;
-                
-                const styleMap = {
-                  cash: { bg: 'bg-emerald-50 text-emerald-800 border-emerald-100', dot: 'bg-emerald-500' },
-                  card: { bg: 'bg-blue-50 text-blue-800 border-blue-100', dot: 'bg-blue-500' },
-                  mobile: { bg: 'bg-indigo-50 text-indigo-800 border-indigo-100', dot: 'bg-indigo-500' },
-                  other: { bg: 'bg-slate-50 text-slate-800 border-slate-200', dot: 'bg-slate-500' }
-                };
-
-                const style = styleMap[method];
-
-                return (
-                  <div key={method} className={`p-2.5 rounded-2xl border ${style.bg} flex flex-col justify-between space-y-1`}>
-                    <div className="flex items-center gap-1.5">
-                       <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
-                      <span className="font-extrabold uppercase text-[9px] tracking-wider">{method}</span>
-                    </div>
-                    <div>
-                      <p className="font-black">{formatCurrency(total, business.currency)}</p>
-                      <p className="text-[9px] font-bold opacity-60">{percent.toFixed(0)}% share</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="pt-3 border-t border-slate-100">
+            <button
+              onClick={() => onNavigate('Products')}
+              className="w-full py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold rounded-xl text-xs text-center transition cursor-pointer border border-slate-200/60"
+            >
+              Manage Catalog Items &rarr;
+            </button>
           </div>
         </div>
       </section>
 
-      {/* DURABLE SECURE DATA BACKUP & CSV EXPORTS HUB */}
-      <section className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-          <div className="space-y-1 select-none">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <Database className="h-5 w-5 text-emerald-800" /> Secure Data Backup & CSV Export Center
-            </h4>
-            <p className="text-xs text-slate-400">Download cryptographically isolated transaction logs and master data catalogs for backups or tax spreadsheets</p>
-          </div>
-          <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-100 text-[10px] font-black uppercase tracking-widest rounded-full">
-            Client-Side Protected
-          </span>
+      {/* 6. CSV Data Export Hub */}
+      <section className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-black uppercase tracking-wider text-slate-400">
+            Export Business Records
+          </h4>
+          <span className="text-[10px] text-slate-400">CSV Downloads</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Action 1: Sales Transactions */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           <button
-            onClick={() => exportSalesToCSV(db.getSales(business.id), business.name)}
-            className="group flex items-center justify-between p-4 bg-slate-50 hover:bg-emerald-50/50 hover:border-emerald-200 border border-slate-100 rounded-2xl text-left transition cursor-pointer"
+            onClick={() => exportSalesToCSV(sales, business.name)}
+            className="p-3 bg-slate-50 hover:bg-blue-50/50 border border-slate-200/60 hover:border-blue-200 rounded-xl text-left transition cursor-pointer group"
           >
-            <div className="space-y-1 min-w-0 pr-2">
-              <p className="font-bold text-slate-800 text-xs group-hover:text-emerald-900 transition-colors flex items-center gap-1.5">
-                Sales Ledger Matrix
-              </p>
-              <p className="text-[10px] text-slate-400">All historical tickets & refunds</p>
-            </div>
-            <div className="h-8 w-8 bg-white border border-slate-200 group-hover:border-emerald-300 group-hover:bg-emerald-50 text-slate-500 group-hover:text-emerald-700 rounded-xl flex items-center justify-center transition-all">
-              <FileDown className="h-4 w-4" />
-            </div>
+            <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600 truncate">Sales Journal</p>
+            <p className="text-[10px] text-slate-400">Receipts & totals</p>
           </button>
 
-          {/* Action 2: Products Catalog (Rendered only for non-services businesses) */}
-          {!(business.category === 'Professional Services' || business.category === 'Beauty & Wellness') && (
-            <button
-              onClick={() => exportProductsToCSV(db.getProducts(business.id), business.name)}
-              className="group flex items-center justify-between p-4 bg-slate-50 hover:bg-emerald-50/50 hover:border-emerald-200 border border-slate-100 rounded-2xl text-left transition cursor-pointer"
-            >
-              <div className="space-y-1 min-w-0 pr-2">
-                <p className="font-bold text-slate-800 text-xs group-hover:text-emerald-900 transition-colors flex items-center gap-1.5">
-                  Inventory Catalog Sheet
-                </p>
-                <p className="text-[10px] text-slate-400">Goods, cost margins, SKU stock</p>
-              </div>
-              <div className="h-8 w-8 bg-white border border-slate-200 group-hover:border-emerald-300 group-hover:bg-emerald-50 text-slate-500 group-hover:text-emerald-700 rounded-xl flex items-center justify-center transition-all">
-                <FileDown className="h-4 w-4" />
-              </div>
-            </button>
-          )}
-
-          {/* Action 3: Service Listings */}
-          {!(business.category === 'Professional Services' || business.category === 'Beauty & Wellness') && (
-            <button
-              onClick={() => exportServicesToCSV(db.getServices(business.id), business.name)}
-              className="group flex items-center justify-between p-4 bg-slate-50 hover:bg-emerald-50/50 hover:border-emerald-200 border border-slate-100 rounded-2xl text-left transition cursor-pointer"
-            >
-              <div className="space-y-1 min-w-0 pr-2">
-                <p className="font-bold text-slate-800 text-xs group-hover:text-emerald-900 transition-colors flex items-center gap-1.5">
-                  Service Package Registry
-                </p>
-                <p className="text-[10px] text-slate-400">Listed plans & service contracts</p>
-              </div>
-              <div className="h-8 w-8 bg-white border border-slate-200 group-hover:border-emerald-300 group-hover:bg-emerald-50 text-slate-500 group-hover:text-emerald-700 rounded-xl flex items-center justify-center transition-all">
-                <FileDown className="h-4 w-4" />
-              </div>
-            </button>
-          )}
-
-          {/* Action 4: Customers Accounts */}
           <button
-            onClick={() => exportCustomersToCSV(db.getCustomers(business.id), business.name)}
-            className="group flex items-center justify-between p-4 bg-slate-50 hover:bg-emerald-50/50 hover:border-emerald-200 border border-slate-100 rounded-2xl text-left transition cursor-pointer"
+            onClick={() => exportProductsToCSV(products, business.name)}
+            className="p-3 bg-slate-50 hover:bg-blue-50/50 border border-slate-200/60 hover:border-blue-200 rounded-xl text-left transition cursor-pointer group"
           >
-            <div className="space-y-1 min-w-0 pr-2">
-              <p className="font-bold text-slate-800 text-xs group-hover:text-emerald-900 transition-colors flex items-center gap-1.5">
-                Customer Database Roll
-              </p>
-              <p className="text-[10px] text-slate-400">Credit lines, emails, profiles</p>
-            </div>
-            <div className="h-8 w-8 bg-white border border-slate-200 group-hover:border-emerald-300 group-hover:bg-emerald-50 text-slate-500 group-hover:text-emerald-700 rounded-xl flex items-center justify-center transition-all">
-              <FileDown className="h-4 w-4" />
-            </div>
+            <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600 truncate">Product Inventory</p>
+            <p className="text-[10px] text-slate-400">Stock & pricing</p>
           </button>
 
-          {/* Action 5: Expenses Ledger */}
           <button
-            onClick={() => exportExpensesToCSV(db.getExpenses(business.id), business.name)}
-            className="group flex items-center justify-between p-4 bg-slate-50 hover:bg-emerald-50/50 hover:border-emerald-200 border border-slate-100 rounded-2xl text-left transition cursor-pointer"
+            onClick={() => exportCustomersToCSV(rawCustomers, business.name)}
+            className="p-3 bg-slate-50 hover:bg-blue-50/50 border border-slate-200/60 hover:border-blue-200 rounded-xl text-left transition cursor-pointer group"
           >
-            <div className="space-y-1 min-w-0 pr-2">
-              <p className="font-bold text-slate-800 text-xs group-hover:text-emerald-900 transition-colors flex items-center gap-1.5">
-                Expenses Outlays Ledger
-              </p>
-              <p className="text-[10px] text-slate-400">Operating costs & supply outlays</p>
-            </div>
-            <div className="h-8 w-8 bg-white border border-slate-200 group-hover:border-emerald-300 group-hover:bg-emerald-50 text-slate-500 group-hover:text-emerald-700 rounded-xl flex items-center justify-center transition-all">
-              <FileDown className="h-4 w-4" />
-            </div>
+            <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600 truncate">Customer Roll</p>
+            <p className="text-[10px] text-slate-400">Balances & contacts</p>
+          </button>
+
+          <button
+            onClick={() => exportExpensesToCSV(expenses, business.name)}
+            className="p-3 bg-slate-50 hover:bg-blue-50/50 border border-slate-200/60 hover:border-blue-200 rounded-xl text-left transition cursor-pointer group"
+          >
+            <p className="font-bold text-xs text-slate-800 group-hover:text-blue-600 truncate">Expense Ledger</p>
+            <p className="text-[10px] text-slate-400">Operating costs</p>
           </button>
         </div>
       </section>
-
-      {/* Main Safeguards & Catalog Overview */}
-      <div className="w-full space-y-6">
-        {(business.category === 'Professional Services' || business.category === 'Beauty & Wellness') ? (
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-            <h4 className="text-xs font-bold text-[#064E3B] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-emerald-700 animate-pulse" /> POS Services Workflow Active
-            </h4>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Your professional services and bookings are consolidated entirely within the main checkout terminal. Standalone management screens and secondary dashboards are disabled to optimize cashier focus.
-            </p>
-          </div>
-        ) : (
-          <>
-            {/* Low stock card alerts */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <h4 className="text-sm font-bold text-amber-700 uppercase tracking-wider mb-4 flex items-center gap-1.5">
-                <AlertTriangle className="h-5 w-5 text-amber-500" /> Stock Safeguard Alarm
-              </h4>
-              
-              {lowStockItems.length > 0 ? (
-                <div className="divide-y divide-slate-100">
-                  {lowStockItems.map(item => (
-                    <div key={item.id} className="py-3.5 flex justify-between items-center text-xs">
-                      <div className="flex items-center gap-3">
-                        {item.imageUrl && (
-                          <img 
-                            src={item.imageUrl} 
-                            alt={item.name} 
-                            className="h-10 w-10 rounded-lg bg-slate-50 object-cover border border-slate-200"
-                            referrerPolicy="no-referrer"
-                          />
-                        )}
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">{item.name}</p>
-                          <p className="text-slate-400 font-mono text-[10px] mt-0.5">
-                            SKU: {item.barcode} &bull; Alert Level: {typeof item.lowStockThreshold === 'number' ? item.lowStockThreshold : 5} &bull; Price: {formatCurrency(item.sellingPrice, business.currency)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right flex flex-col items-end gap-1">
-                        <span className="px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-100 text-amber-700 font-bold text-[10px]">
-                          Current Stock: {item.stockQuantity}
-                        </span>
-                        <span className="text-[10px] font-black uppercase text-rose-600 tracking-wider">
-                          {item.stockQuantity <= 0 ? 'Out of Stock' : 'Low Stock'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 text-center text-slate-400 text-xs">
-                  All catalog products are securely stocked above low threshold. Excellent!
-                </div>
-              )}
-              
-              <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
-                <button 
-                  onClick={() => onNavigate('Inventory')}
-                  className="text-xs font-bold text-emerald-600 hover:text-emerald-700 cursor-pointer"
-                >
-                  Refill Inventory Catalog &rarr;
-                </button>
-              </div>
-            </div>
-
-            {/* Quick Stats overview of catalog */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Goods Catalog</p>
-                <h4 className="text-3xl font-bold text-slate-800 mt-2">{products.length} Items</h4>
-                <button onClick={() => onNavigate('Products')} className="text-xs font-bold text-emerald-600 hover:text-emerald-700 mt-4 inline-block cursor-pointer">
-                  Manage Products &rarr;
-                </button>
-              </div>
-
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Service Listings</p>
-                <h4 className="text-3xl font-bold text-slate-800 mt-2">{services.length} Listed</h4>
-                <button onClick={() => onNavigate('Products')} className="text-xs font-bold text-emerald-600 hover:text-emerald-700 mt-4 inline-block cursor-pointer">
-                  Manage Services &rarr;
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
     </div>
   );
 }
-

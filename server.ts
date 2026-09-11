@@ -166,7 +166,6 @@ function readSmsConfig(): ArkeselServerConfig {
       return {
         ...defaultConfig,
         ...parsed,
-        // If file has empty key, fallback to env
         apiKey: parsed.apiKey || defaultConfig.apiKey,
         senderId: parsed.senderId || defaultConfig.senderId,
         apiEndpoint: parsed.apiEndpoint || defaultConfig.apiEndpoint,
@@ -182,7 +181,7 @@ function readSmsConfig(): ArkeselServerConfig {
 // In-memory cache for SMS configuration to eliminate disk read latency on every request
 let inMemorySmsConfig: ArkeselServerConfig = readSmsConfig();
 
-// Save SMS configuration securely to server filesystem and update in-memory cache
+// Save SMS configuration to local file mirror
 function writeSmsConfig(config: ArkeselServerConfig): void {
   inMemorySmsConfig = { ...config };
   try {
@@ -191,6 +190,147 @@ function writeSmsConfig(config: ArkeselServerConfig): void {
     console.error('Error writing sms_config.json:', err);
   }
 }
+
+// Write SMS configuration to Firestore as source of truth, and mirror locally
+async function writeSmsConfigToFirestore(config: ArkeselServerConfig): Promise<boolean> {
+  inMemorySmsConfig = { ...config };
+
+  // 1. Write local file mirror
+  writeSmsConfig(config);
+
+  // Also write into cloud_db.json
+  try {
+    const dbData = readDatabase();
+    dbData['bos_sms_config'] = [{ id: 'global', ...config, updatedAt: new Date().toISOString() }];
+    writeDatabase(dbData);
+  } catch (e) {
+    console.warn('Error mirroring SMS config to cloud_db.json:', e);
+  }
+
+  // 2. Write to Firestore Admin SDK
+  let firestoreSuccess = false;
+  try {
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      await firestoreDb.collection('bos_sms_config').doc('global').set({
+        apiKey: config.apiKey || '',
+        senderId: config.senderId || 'BusinessOS',
+        apiEndpoint: config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+        isEnabled: config.isEnabled,
+        lastTestedAt: config.lastTestedAt || null,
+        lastTestStatus: config.lastTestStatus || null,
+        lastTestMessage: config.lastTestMessage || null,
+        totalSentCount: config.totalSentCount || 0,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      firestoreSuccess = true;
+      console.log('[Firestore Admin] Successfully wrote SMS config to bos_sms_config/global');
+    }
+  } catch (err) {
+    console.warn('[Firestore Admin] Note on writing SMS config:', err);
+  }
+
+  // 3. Fallback: Write via Firestore REST API
+  if (!firestoreSuccess && firebaseConfig?.projectId && firebaseConfig?.apiKey) {
+    try {
+      const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
+      const docPath = `projects/${firebaseConfig.projectId}/databases/${dbId}/documents/bos_sms_config/global`;
+      const url = `https://firestore.googleapis.com/v1/${docPath}?key=${firebaseConfig.apiKey}`;
+      const restPayload = {
+        fields: {
+          apiKey: { stringValue: config.apiKey || '' },
+          senderId: { stringValue: config.senderId || 'BusinessOS' },
+          apiEndpoint: { stringValue: config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send' },
+          isEnabled: { booleanValue: config.isEnabled },
+          lastTestedAt: { stringValue: config.lastTestedAt || '' },
+          lastTestStatus: { stringValue: config.lastTestStatus || '' },
+          lastTestMessage: { stringValue: config.lastTestMessage || '' },
+          totalSentCount: { integerValue: String(config.totalSentCount || 0) },
+          updatedAt: { stringValue: new Date().toISOString() }
+        }
+      };
+      const resp = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(restPayload)
+      });
+      if (resp.ok) {
+        firestoreSuccess = true;
+        console.log('[Firestore REST] Successfully wrote SMS config to bos_sms_config/global');
+      }
+    } catch (e) {
+      console.warn('[Firestore REST] Note on writing SMS config:', e);
+    }
+  }
+
+  return true;
+}
+
+// Load SMS configuration from Firestore as source of truth
+async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
+  // 1. Try Admin SDK
+  try {
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      const doc = await firestoreDb.collection('bos_sms_config').doc('global').get();
+      if (doc.exists) {
+        const d = doc.data() as any;
+        const config: ArkeselServerConfig = {
+          apiKey: d.apiKey || inMemorySmsConfig.apiKey || '',
+          senderId: d.senderId || inMemorySmsConfig.senderId || 'BusinessOS',
+          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+          isEnabled: d.isEnabled !== false,
+          lastTestedAt: d.lastTestedAt,
+          lastTestStatus: d.lastTestStatus,
+          lastTestMessage: d.lastTestMessage,
+          totalSentCount: d.totalSentCount || 0
+        };
+        inMemorySmsConfig = config;
+        writeSmsConfig(config);
+        console.log('[Firestore Admin] Synced SMS config from bos_sms_config/global');
+        return config;
+      }
+    }
+  } catch (err) {
+    console.warn('[Firestore Admin] Note on loading SMS config:', err);
+  }
+
+  // 2. Try REST API
+  if (firebaseConfig?.projectId && firebaseConfig?.apiKey) {
+    try {
+      const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
+      const docPath = `projects/${firebaseConfig.projectId}/databases/${dbId}/documents/bos_sms_config/global`;
+      const url = `https://firestore.googleapis.com/v1/${docPath}?key=${firebaseConfig.apiKey}`;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const d = await resp.json();
+        if (d?.fields) {
+          const config: ArkeselServerConfig = {
+            apiKey: d.fields.apiKey?.stringValue || inMemorySmsConfig.apiKey || '',
+            senderId: d.fields.senderId?.stringValue || inMemorySmsConfig.senderId || 'BusinessOS',
+            apiEndpoint: d.fields.apiEndpoint?.stringValue || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+            isEnabled: d.fields.isEnabled?.booleanValue !== false,
+            lastTestedAt: d.fields.lastTestedAt?.stringValue,
+            lastTestStatus: d.fields.lastTestStatus?.stringValue,
+            lastTestMessage: d.fields.lastTestMessage?.stringValue,
+            totalSentCount: parseInt(d.fields.totalSentCount?.integerValue || '0', 10)
+          };
+          inMemorySmsConfig = config;
+          writeSmsConfig(config);
+          console.log('[Firestore REST] Synced SMS config from bos_sms_config/global');
+          return config;
+        }
+      }
+    } catch (e) {
+      console.warn('[Firestore REST] Note on loading SMS config:', e);
+    }
+  }
+
+  return inMemorySmsConfig;
+}
+
+// Initial sync on boot
+syncSmsConfigFromFirestore().catch(() => {});
 
 // Normalize phone numbers (Ghana numbers: 024xxxxxxx -> 23324xxxxxxx; standard international cleaned)
 function normalizePhoneNumber(phone: string): string {
@@ -344,7 +484,7 @@ async function dispatchArkeselSms({
     return {
       success: false,
       status: 'Failed',
-      message: 'Arkesel SMS service is currently disabled by Super Administrator in SMS Settings.',
+      message: 'SMS service is currently disabled by the Super Admin.',
       recipient: cleanedRecipients.join(', '),
       timings: {
         clientTriggerTime,
@@ -384,7 +524,7 @@ async function dispatchArkeselSms({
     const targetBusiness = businesses.find((b: any) => b && b.id === businessId);
     if (targetBusiness && targetBusiness.smsEnabled === false) {
       const completionTime = Date.now();
-      const disabledMsg = `SMS functionality for "${targetBusiness.name || businessId}" has been disabled by the Super Administrator.`;
+      const disabledMsg = 'SMS service is currently disabled by the Super Admin for this business.';
       console.warn(`[Arkesel SMS Blocked] Business ${businessId} has SMS disabled by Super Admin.`);
       return {
         success: false,
@@ -874,8 +1014,8 @@ app.get('/api/admin/sms-config', (req, res) => {
   }
 });
 
-// API 3.7: Update Central Arkesel SMS Settings
-app.post('/api/admin/sms-config', (req, res) => {
+// API 3.7: Update Central Arkesel SMS Settings (Persisted to Firestore as source of truth)
+app.post('/api/admin/sms-config', async (req, res) => {
   try {
     const { apiKey, senderId, apiEndpoint, isEnabled } = req.body;
     const current = readSmsConfig();
@@ -895,8 +1035,16 @@ app.post('/api/admin/sms-config', (req, res) => {
       }
     }
 
-    writeSmsConfig(updated);
-    console.log('[Super Admin SMS] Updated central Arkesel SMS gateway configuration');
+    // Persist to Firestore as authoritative source of truth
+    const writeOk = await writeSmsConfigToFirestore(updated);
+    if (!writeOk) {
+      return res.status(500).json({
+        success: false,
+        message: '✕ Failed to save Arkesel SMS settings. Please try again.'
+      });
+    }
+
+    console.log('[Super Admin SMS] Saved SMS settings to Firestore & local cache');
 
     const hasKey = Boolean(updated.apiKey && updated.apiKey.length > 0);
     const maskedKey = hasKey
@@ -905,7 +1053,7 @@ app.post('/api/admin/sms-config', (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Arkesel SMS configuration saved successfully.',
+      message: '✓ Arkesel SMS settings saved successfully.',
       config: {
         provider: 'Arkesel',
         senderId: updated.senderId,
@@ -919,26 +1067,135 @@ app.post('/api/admin/sms-config', (req, res) => {
     });
   } catch (err: any) {
     console.error('Error in POST /api/admin/sms-config:', err);
-    return res.status(500).json({ success: false, error: err.message || 'Failed to update SMS configuration' });
+    return res.status(500).json({
+      success: false,
+      message: '✕ Failed to save Arkesel SMS settings. Please try again.',
+      error: err.message || 'Failed to update SMS configuration'
+    });
   }
 });
 
-// API 3.8: Send Test SMS via real Arkesel API (Instant dispatch with timings)
+// API 3.7b: Global SMS Service Enable / Disable
+app.post('/api/admin/sms-toggle', async (req, res) => {
+  try {
+    const { isEnabled } = req.body;
+    const current = readSmsConfig();
+    current.isEnabled = Boolean(isEnabled);
+    await writeSmsConfigToFirestore(current);
+
+    console.log(`[Super Admin SMS] Global service toggled to: ${current.isEnabled ? 'ENABLED' : 'DISABLED'}`);
+
+    return res.json({
+      success: true,
+      isEnabled: current.isEnabled,
+      message: current.isEnabled ? 'Arkesel SMS service enabled globally.' : 'Arkesel SMS service disabled globally.'
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/sms-toggle:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API 3.7c: Test Arkesel Connection (Tests real API balance/account endpoint)
+app.post('/api/admin/sms/test-connection', async (req, res) => {
+  try {
+    const current = readSmsConfig();
+    const candidateKey = req.body.apiKey && typeof req.body.apiKey === 'string' && !req.body.apiKey.includes('••••')
+      ? req.body.apiKey.trim()
+      : current.apiKey.trim();
+
+    if (!candidateKey) {
+      return res.status(400).json({
+        success: false,
+        message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+        error: 'No Arkesel API key has been provided or saved.'
+      });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      // Arkesel v2 balance details endpoint
+      const response = await fetch('https://sms.arkesel.com/api/v2/clients/balance-details', {
+        method: 'GET',
+        headers: {
+          'api-key': candidateKey,
+          'Accept': 'application/json'
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      const respText = await response.text();
+      let data: any = null;
+      try { data = JSON.parse(respText); } catch { data = { raw: respText }; }
+
+      const isOk = response.ok && (data?.status === 'success' || data?.data !== undefined || response.status === 200);
+
+      if (isOk) {
+        current.lastTestedAt = new Date().toISOString();
+        current.lastTestStatus = 'Active & Connected';
+        current.lastTestMessage = `Connection verified. Balance: ${data?.data?.sms_balance ?? 'Available'}`;
+        await writeSmsConfigToFirestore(current);
+
+        return res.json({
+          success: true,
+          message: '✓ Arkesel connection successful.',
+          balance: data?.data?.sms_balance ?? null,
+          details: data
+        });
+      } else {
+        current.lastTestedAt = new Date().toISOString();
+        current.lastTestStatus = 'Failed';
+        current.lastTestMessage = data?.message || data?.error || 'Authentication rejected';
+        await writeSmsConfigToFirestore(current);
+
+        return res.json({
+          success: false,
+          message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+          error: data?.message || data?.error || 'Arkesel rejected the provided API credentials.'
+        });
+      }
+    } catch (fetchErr: any) {
+      clearTimeout(timeout);
+      current.lastTestedAt = new Date().toISOString();
+      current.lastTestStatus = 'Failed';
+      current.lastTestMessage = fetchErr.name === 'AbortError' ? 'Timeout connecting to Arkesel' : fetchErr.message;
+      await writeSmsConfigToFirestore(current);
+
+      return res.json({
+        success: false,
+        message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+        error: fetchErr.name === 'AbortError' ? 'Connection timed out after 8 seconds.' : (fetchErr.message || 'Network error')
+      });
+    }
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/sms/test-connection:', err);
+    return res.status(500).json({
+      success: false,
+      message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+      error: err.message
+    });
+  }
+});
+
+// API 3.8: Send Test SMS via real Arkesel API (Uses saved credentials)
 app.post('/api/admin/sms/test', async (req, res) => {
   try {
     const { phoneNumber, message, clientTriggerTime } = req.body;
 
-    if (!phoneNumber) {
+    if (!phoneNumber || !String(phoneNumber).trim()) {
       return res.status(400).json({
         success: false,
         status: 'Invalid phone number',
-        message: 'Please provide a recipient phone number for the test SMS.'
+        message: '✕ Test SMS failed. Please provide a valid recipient phone number.'
       });
     }
 
     const testMessage = (message && String(message).trim())
       ? String(message).trim()
-      : `BusinessOS Arkesel Gateway Test at ${new Date().toLocaleTimeString()}. If you received this, SMS is active and working!`;
+      : 'BusinessOS SMS configuration test successful.';
 
     const result = await dispatchArkeselSms({
       recipients: [phoneNumber],
@@ -948,13 +1205,20 @@ app.post('/api/admin/sms/test', async (req, res) => {
       clientTriggerTime: Number(clientTriggerTime) || undefined
     });
 
-    return res.json(result);
+    return res.json({
+      ...result,
+      displayMessage: result.success
+        ? '✓ Test SMS sent successfully.'
+        : '✕ Test SMS failed. Please check your Arkesel configuration.'
+    });
   } catch (err: any) {
     console.error('Error in POST /api/admin/sms/test:', err);
     return res.status(500).json({
       success: false,
       status: 'Network error',
-      message: err.message || 'An unexpected error occurred while executing the Arkesel test SMS'
+      message: '✕ Test SMS failed. Please check your Arkesel configuration.',
+      displayMessage: '✕ Test SMS failed. Please check your Arkesel configuration.',
+      error: err.message || 'An unexpected error occurred while executing the Arkesel test SMS'
     });
   }
 });

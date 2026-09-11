@@ -34,6 +34,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
   
   // Customer selection
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [checkoutCustomerPhone, setCheckoutCustomerPhone] = useState('');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile' | 'other'>('cash');
   const [amountReceived, setAmountReceived] = useState<number | ''>('');
@@ -459,6 +460,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     }
 
     const customer = customers.find(c => c.id === selectedCustomerId);
+    const targetPhone = checkoutCustomerPhone.trim() || customer?.phone || undefined;
     const activeSaleBranchId = (branchId && branchId !== 'All') ? branchId : (user.branchId || undefined);
 
     const newSale: Sale = {
@@ -480,6 +482,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
       change: paymentMethod === 'cash' ? (Number(amountReceived) - total) : undefined,
       customerId: customer?.id,
       customerName: customer?.name,
+      customerPhone: targetPhone,
       employeeId: user.id,
       employeeName: user.name,
       createdAt: new Date().toISOString(),
@@ -496,6 +499,30 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
       totalAmount: total,
       itemCount: cart.reduce((acc, item) => acc + item.quantity, 0)
     });
+
+    // Automatically trigger Arkesel SMS Receipt dispatch in background if phone was supplied
+    if (targetPhone) {
+      const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+      const msg = `${business.name}: Receipt #${newSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(newSale.total, newSale.currency || business.currency)}. Thank you for your patronage!`;
+      setIsSendingSmsReceipt(true);
+      db.sendSms({
+        recipient: targetPhone,
+        message: msg,
+        businessId: business.id,
+        type: 'receipt'
+      }).then(res => {
+        if (res.success) {
+          setSmsReceiptStatus({ success: true, message: `Receipt SMS sent successfully to ${targetPhone}.` });
+        } else {
+          setSmsReceiptStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
+        }
+      }).catch(err => {
+        console.warn('SMS dispatch background notice:', err);
+        setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
+      }).finally(() => {
+        setIsSendingSmsReceipt(false);
+      });
+    }
 
     // Decrement stock levels for products in cart in real-time
     cart.forEach(item => {
@@ -546,12 +573,12 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     });
 
     setCreatedSale(newSale);
-    setSmsReceiptPhone(customer?.phone || '');
-    setSmsReceiptStatus(null);
+    setSmsReceiptPhone(targetPhone || '');
     setCart([]);
     setAmountReceived('');
     setDiscountPercent(0);
     setSelectedCustomerId('');
+    setCheckoutCustomerPhone('');
     alert('POS sale completed successfully! Invoice receipt generated.');
     onSaleComplete();
   };
@@ -757,7 +784,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
           onClick={() => setMobilePosTab('catalog')}
           className={`flex-1 py-2 rounded-xl text-xs font-bold text-center transition flex items-center justify-center gap-1.5 cursor-pointer ${
             mobilePosTab === 'catalog' 
-              ? 'bg-[#064E3B] text-white shadow-sm' 
+              ? 'bg-blue-600 text-white shadow-sm' 
               : 'text-slate-600 hover:text-slate-900 font-semibold'
           }`}
         >
@@ -767,7 +794,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
           onClick={() => setMobilePosTab('cart')}
           className={`flex-1 py-2 rounded-xl text-xs font-bold text-center transition flex items-center justify-center gap-1.5 cursor-pointer ${
             mobilePosTab === 'cart' 
-              ? 'bg-[#064E3B] text-white shadow-sm' 
+              ? 'bg-blue-600 text-white shadow-sm' 
               : 'text-slate-600 hover:text-slate-900 font-semibold'
           }`}
         >
@@ -794,7 +821,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               placeholder={isServiceCategory ? "Search services by name or category..." : "Search goods & services by name or category..."}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="block w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-[#064E3B] focus:border-[#064E3B] text-sm"
+              className="block w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
             />
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -849,7 +876,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               onClick={() => setLeftTab('catalog')}
               className={`flex-1 py-2 rounded-xl text-xs font-bold text-center transition flex items-center justify-center gap-1.5 cursor-pointer ${
                 leftTab === 'catalog' 
-                  ? 'bg-[#064E3B] text-white shadow-sm' 
+                  ? 'bg-blue-600 text-white shadow-sm' 
                   : 'text-slate-600 hover:text-slate-900 font-semibold'
               }`}
             >
@@ -859,7 +886,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               onClick={() => setLeftTab('products')}
               className={`flex-1 py-2 rounded-xl text-xs font-bold text-center transition flex items-center justify-center gap-1.5 cursor-pointer ${
                 leftTab === 'products' 
-                  ? 'bg-[#064E3B] text-white shadow-sm' 
+                  ? 'bg-blue-600 text-white shadow-sm' 
                   : 'text-slate-600 hover:text-slate-900 font-semibold'
               }`}
             >
@@ -869,7 +896,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               onClick={() => setLeftTab('activeJobs')}
               className={`flex-1 py-2 rounded-xl text-xs font-bold text-center transition flex items-center justify-center gap-1.5 cursor-pointer ${
                 leftTab === 'activeJobs' 
-                  ? 'bg-[#064E3B] text-white shadow-sm' 
+                  ? 'bg-blue-600 text-white shadow-sm' 
                   : 'text-slate-600 hover:text-slate-900 font-semibold'
               }`}
             >
@@ -890,7 +917,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                 onClick={() => setSelectedCategory(cat)}
                 className={`px-4 py-1.5 rounded-full text-xs font-bold transition shrink-0 cursor-pointer ${
                   selectedCategory === cat 
-                    ? 'bg-[#064E3B] text-white shadow-sm' 
+                    ? 'bg-blue-600 text-white shadow-sm' 
                     : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
                 }`}
               >
@@ -1028,7 +1055,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                         </div>
 
                         <div className="flex justify-between items-end mt-4">
-                          <span className="text-sm font-bold text-[#064E3B]">{formatCurrency(p.sellingPrice, business.currency)}</span>
+                          <span className="text-sm font-bold text-blue-600">{formatCurrency(p.sellingPrice, business.currency)}</span>
                           <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
                             isOut ? 'bg-red-50 text-red-700 border-red-100' : isLow ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-slate-100 text-slate-500 border-slate-200/60'
                           }`}>
@@ -1060,7 +1087,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                         <h4 className="text-xs font-bold text-slate-800 leading-snug">{s.name}</h4>
                         <p className="text-[10px] text-slate-500 line-clamp-1 leading-normal">{s.description}</p>
                       </div>
-                      <span className="text-sm font-bold text-[#064E3B] shrink-0">{formatCurrency(s.price, business.currency)}</span>
+                      <span className="text-sm font-bold text-blue-600 shrink-0">{formatCurrency(s.price, business.currency)}</span>
                     </button>
                   ))}
                 </div>
@@ -1251,7 +1278,16 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Customer Profile</label>
                 <select
                   value={selectedCustomerId}
-                  onChange={(e) => setSelectedCustomerId(e.target.value)}
+                  onChange={(e) => {
+                    const custId = e.target.value;
+                    setSelectedCustomerId(custId);
+                    if (custId) {
+                      const selectedCust = customers.find(c => c.id === custId);
+                      if (selectedCust?.phone) {
+                        setCheckoutCustomerPhone(selectedCust.phone);
+                      }
+                    }
+                  }}
                   className="w-full p-2.5 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs focus:ring-1 focus:ring-emerald-500 cursor-pointer font-bold"
                 >
                   <option value="">Walk-in Customer</option>
@@ -1281,6 +1317,21 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               </div>
             </div>
 
+            {/* Optional Customer Phone for Automatic SMS Receipt */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                <span>Customer Phone (SMS Receipt)</span>
+                <span className="text-[9px] text-emerald-600 font-semibold lowercase">optional</span>
+              </label>
+              <input
+                type="tel"
+                value={checkoutCustomerPhone}
+                onChange={(e) => setCheckoutCustomerPhone(e.target.value)}
+                placeholder="e.g. 0244123456"
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs font-mono focus:ring-1 focus:ring-emerald-500 font-bold"
+              />
+            </div>
+
             {/* Payment Method Selector */}
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Payment Method</label>
@@ -1294,7 +1345,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                     }}
                     className={`py-2 rounded-xl text-[10px] font-bold uppercase text-center transition cursor-pointer ${
                       paymentMethod === method
-                        ? 'bg-[#064E3B] text-white shadow-sm'
+                        ? 'bg-blue-600 text-white shadow-sm'
                         : 'bg-white text-slate-600 border border-slate-200/80 hover:bg-slate-100'
                     }`}
                   >
@@ -1306,10 +1357,10 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
             {/* Cash Payment & Change Calculation */}
             {paymentMethod === 'cash' && (
-              <div className="bg-emerald-50/50 border border-emerald-100 p-3.5 rounded-2xl space-y-3">
+              <div className="bg-blue-50/50 border border-blue-100 p-3.5 rounded-2xl space-y-3">
                 <div className="flex justify-between items-center text-xs">
-                  <label className="block text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Amount Received ({business.currency})</label>
-                  <span className="text-[10px] font-mono font-bold text-emerald-700 bg-white border border-emerald-100 px-2 py-0.5 rounded">
+                  <label className="block text-[10px] font-bold text-blue-800 uppercase tracking-wider">Amount Received ({business.currency})</label>
+                  <span className="text-[10px] font-mono font-bold text-blue-700 bg-white border border-blue-100 px-2 py-0.5 rounded">
                     Due: {formatCurrency(total, business.currency)}
                   </span>
                 </div>
@@ -1323,14 +1374,14 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                     step="0.01"
                     value={amountReceived}
                     onChange={(e) => setAmountReceived(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                    className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs focus:ring-1 focus:ring-emerald-500 font-bold font-mono"
+                    className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs focus:ring-1 focus:ring-blue-500 font-bold font-mono"
                     placeholder="Enter cash amount received..."
                   />
                 </div>
                 {amountReceived !== '' && amountReceived >= total && (
-                  <div className="flex justify-between items-center text-xs font-mono font-bold bg-white p-2.5 rounded-xl border border-emerald-100">
+                  <div className="flex justify-between items-center text-xs font-mono font-bold bg-white p-2.5 rounded-xl border border-blue-100">
                     <span className="text-slate-500">Change Due:</span>
-                    <span className="text-emerald-800 text-sm">
+                    <span className="text-blue-800 text-sm">
                       {formatCurrency(amountReceived - total, business.currency)}
                     </span>
                   </div>
@@ -1355,7 +1406,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               <button
                 onClick={handleCheckout}
                 disabled={cart.length === 0}
-                className="py-2.5 px-4 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-xs font-bold disabled:opacity-30 cursor-pointer shadow-sm flex items-center justify-center gap-1.5 transition-colors"
+                className="py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold disabled:opacity-30 cursor-pointer shadow-sm flex items-center justify-center gap-1.5 transition-colors active:scale-95"
               >
                 Complete Order
               </button>
@@ -1366,8 +1417,8 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
       {/* MODAL 1: Live Invoice / Printable Receipt Preview */}
       {createdSale && (
-        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-scale-up relative border border-slate-100">
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 sm:p-6 shadow-2xl relative border border-slate-100 my-auto max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setCreatedSale(null)}
               className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400 cursor-pointer"
@@ -1571,7 +1622,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors"
                 >
                   Apply Customization
                 </button>

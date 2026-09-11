@@ -86,16 +86,25 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [smsSaving, setSmsSaving] = useState(false);
   const [smsSaveMessage, setSmsSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Test SMS State
+  // Test SMS & Connection States
   const [testPhoneNumber, setTestPhoneNumber] = useState('');
-  const [testSmsMessage, setTestSmsMessage] = useState('BusinessOS Gateway Test: Arkesel SMS is active and delivered successfully.');
+  const [testSmsMessage, setTestSmsMessage] = useState('BusinessOS SMS configuration test successful.');
   const [isSendingTestSms, setIsSendingTestSms] = useState(false);
   const [testSmsResult, setTestSmsResult] = useState<{
     status: string;
     message: string;
     success: boolean;
     recipient?: string;
+    displayMessage?: string;
     timings?: SmsTimingDetails;
+  } | null>(null);
+
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<{
+    success: boolean;
+    message: string;
+    balance?: any;
+    details?: any;
   } | null>(null);
 
   // SMS Delivery Logs State
@@ -305,8 +314,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     }
   };
 
-  const handleSaveSmsConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveSmsConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setSmsSaving(true);
     setSmsSaveMessage(null);
 
@@ -319,21 +328,55 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       });
 
       if (result.success) {
-        setSmsSaveMessage({ type: 'success', text: result.message || 'Arkesel SMS configuration saved successfully!' });
+        setSmsSaveMessage({ type: 'success', text: '✓ Arkesel SMS settings saved successfully.' });
         if (result.config) {
           setSmsConfig(prev => ({ ...prev, ...result.config }));
           if (result.config.maskedApiKey) {
             setSmsApiKeyInput(result.config.maskedApiKey);
           }
         }
+        await loadSmsConfigAndLogs();
       } else {
-        setSmsSaveMessage({ type: 'error', text: result.message || 'Failed to save configuration.' });
+        setSmsSaveMessage({ type: 'error', text: '✕ Failed to save Arkesel SMS settings. Please try again.' });
       }
     } catch (err: any) {
-      setSmsSaveMessage({ type: 'error', text: err.message || 'Network error while saving settings.' });
+      setSmsSaveMessage({ type: 'error', text: '✕ Failed to save Arkesel SMS settings. Please try again.' });
     } finally {
       setSmsSaving(false);
+      setTimeout(() => setSmsSaveMessage(null), 6000);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setIsTestingConnection(true);
+    setConnectionTestResult(null);
+    try {
+      const res = await db.testSmsConnection(smsApiKeyInput);
+      setConnectionTestResult(res);
+      const updatedConfig = await db.getSmsSettings();
+      if (updatedConfig) setSmsConfig(updatedConfig);
+    } catch (err: any) {
+      setConnectionTestResult({
+        success: false,
+        message: '✕ Arkesel connection failed. Please check your API key and configuration.'
+      });
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
+  const handleToggleGlobalSms = async (enabled: boolean) => {
+    try {
+      const res = await db.toggleGlobalSms(enabled);
+      setSmsIsEnabled(res.isEnabled);
+      setSmsConfig(prev => ({ ...prev, isEnabled: res.isEnabled }));
+      setSmsSaveMessage({
+        type: 'success',
+        text: res.isEnabled ? '✓ Arkesel SMS service enabled globally.' : '✓ Arkesel SMS service disabled globally.'
+      });
       setTimeout(() => setSmsSaveMessage(null), 5000);
+    } catch (e) {
+      console.warn('Error toggling global SMS:', e);
     }
   };
 
@@ -343,7 +386,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setTestSmsResult({
         success: false,
         status: 'Invalid phone number',
-        message: 'Please provide a recipient phone number for the test SMS.'
+        message: '✕ Test SMS failed. Please provide a valid recipient phone number.'
       });
       return;
     }
@@ -355,7 +398,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     try {
       const res = await db.sendTestSms(testPhoneNumber.trim(), testSmsMessage.trim(), clientTriggerTime);
       setTestSmsResult(res);
-      // Refresh configuration and logs to update status badges and stats
+      // Refresh configuration and logs
       const updatedConfig = await db.getSmsSettings();
       if (updatedConfig) setSmsConfig(updatedConfig);
       const updatedLogs = await db.getSmsLogs();
@@ -364,7 +407,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setTestSmsResult({
         success: false,
         status: 'Network error',
-        message: err.message || 'Network error executing test SMS.'
+        message: '✕ Test SMS failed. Please check your Arkesel configuration.'
       });
     } finally {
       setIsSendingTestSms(false);
@@ -982,12 +1025,13 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         </button>
 
         <button
+          id="nav-superadmin-sms"
           onClick={() => { setActiveTab('sms'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
             activeTab === 'sms' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
           }`}
         >
-          <MessageSquare className="h-4 w-4 text-emerald-400" /> SMS Settings (Arkesel)
+          <MessageSquare className="h-4 w-4 text-emerald-400" /> SMS / Arkesel
         </button>
 
         <button
@@ -1633,9 +1677,13 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         <MessageSquare className="h-5 w-5 text-emerald-700" />
                       </div>
                       <div>
-                        <h3 className="font-extrabold text-slate-900 text-base">
-                          Central SMS Gateway Settings
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-slate-400">Settings</span>
+                          <span className="text-slate-300">/</span>
+                          <h3 className="font-extrabold text-slate-900 text-base">
+                            SMS / Arkesel
+                          </h3>
+                        </div>
                         <p className="text-xs text-slate-500 font-medium">
                           Official Arkesel SMS Gateway Integration &amp; Platform-Wide Delivery
                         </p>
@@ -1644,28 +1692,50 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                      !smsConfig.isEnabled 
-                        ? 'bg-slate-100 text-slate-700 border border-slate-200' 
-                        : smsConfig.hasApiKey 
-                          ? smsConfig.lastTestStatus === 'Success'
-                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                            : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
-                          : 'bg-amber-50 text-amber-800 border border-amber-200'
-                    }`}>
-                      <span className={`h-2 w-2 rounded-full ${
-                        !smsConfig.isEnabled 
-                          ? 'bg-slate-400' 
-                          : smsConfig.hasApiKey 
-                            ? smsConfig.lastTestStatus === 'Success' ? 'bg-emerald-500' : 'bg-indigo-500'
-                            : 'bg-amber-500'
-                      }`} />
-                      {!smsConfig.isEnabled 
-                        ? 'Service Disabled' 
-                        : smsConfig.hasApiKey 
-                          ? smsConfig.lastTestStatus === 'Success' ? 'Active & Connected' : 'Configured (Untested)' 
-                          : 'API Key Required'}
-                    </span>
+                    {/* SMS Service: Enabled / Disabled Badge */}
+                    <div className="flex items-center gap-2 mr-2">
+                      <span className="text-xs font-bold text-slate-600">SMS Service:</span>
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${
+                        smsIsEnabled 
+                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                          : 'bg-rose-50 text-rose-800 border border-rose-200'
+                      }`}>
+                        <span className={`h-2 w-2 rounded-full ${smsIsEnabled ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                        {smsIsEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+
+                    {/* Enable SMS Button */}
+                    <button
+                      type="button"
+                      id="btn-enable-sms"
+                      onClick={() => handleToggleGlobalSms(true)}
+                      disabled={smsIsEnabled}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[40px] ${
+                        smsIsEnabled 
+                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                      }`}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Enable SMS
+                    </button>
+
+                    {/* Disable SMS Button */}
+                    <button
+                      type="button"
+                      id="btn-disable-sms"
+                      onClick={() => handleToggleGlobalSms(false)}
+                      disabled={!smsIsEnabled}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[40px] ${
+                        !smsIsEnabled 
+                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                          : 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm'
+                      }`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Disable SMS
+                    </button>
 
                     <button
                       type="button"
@@ -1684,20 +1754,22 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-6">
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SMS Provider</p>
-                    <p className="font-extrabold text-slate-800 text-sm mt-0.5">Arkesel Telecom</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5">Arkesel</p>
                     <p className="text-[10px] text-emerald-700 font-semibold">Official Gateway v2</p>
                   </div>
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Sender ID</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sender ID</p>
                     <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{smsConfig.senderId || 'BusinessOS'}</p>
                     <p className="text-[10px] text-slate-500">Max 11 Alphanumeric</p>
                   </div>
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Dispatches</p>
-                    <p className="font-extrabold text-slate-800 text-sm mt-0.5">{smsConfig.totalSentCount || smsLogs.length}</p>
-                    <p className="text-[10px] text-slate-500">Tracked in audit logs</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SMS Service Status</p>
+                    <p className={`font-extrabold text-sm mt-0.5 ${smsIsEnabled ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {smsIsEnabled ? 'Enabled' : 'Disabled'}
+                    </p>
+                    <p className="text-[10px] text-slate-500">Global Service State</p>
                   </div>
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
@@ -1717,19 +1789,19 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
               {/* Main Controls Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Left Column: API Configuration Form */}
+                {/* Left Column: Arkesel Configuration Form */}
                 <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                     <div>
                       <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
-                        <Key className="h-4 w-4 text-emerald-700" /> Arkesel API Credentials
+                        <Key className="h-4 w-4 text-emerald-700" /> Arkesel Configuration
                       </h4>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Central credentials applied to customer receipts, fee alerts, and notifications.
+                        Configure Arkesel SMS gateway credentials. Saved securely to Firestore as source of truth.
                       </p>
                     </div>
                     <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold rounded-lg uppercase">
-                      Server Secured
+                      Firestore Synced
                     </span>
                   </div>
 
@@ -1749,7 +1821,20 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   )}
 
                   <form onSubmit={handleSaveSmsConfig} className="space-y-4 text-xs">
-                    {/* API Key */}
+                    {/* SMS Provider */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                        SMS Provider
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value="Arkesel"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold text-sm cursor-not-allowed"
+                      />
+                    </div>
+
+                    {/* Arkesel API Key */}
                     <div>
                       <div className="flex justify-between items-center mb-1.5">
                         <label className="block text-xs font-bold text-slate-700 uppercase">
@@ -1777,14 +1862,14 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         autoComplete="off"
                       />
                       <p className="text-[11px] text-slate-400 mt-1">
-                        Obtained from your Arkesel account dashboard. Kept strictly on the server; never sent to frontend bundles.
+                        Obtained from your Arkesel account dashboard. Kept securely on the server; never exposed to browser bundles.
                       </p>
                     </div>
 
                     {/* Sender ID */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
-                        SMS Sender ID <span className="text-rose-500">*</span>
+                        Sender ID <span className="text-rose-500">*</span>
                       </label>
                       <input
                         type="text"
@@ -1796,14 +1881,14 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm uppercase focus:ring-2 focus:ring-emerald-500 outline-none transition"
                       />
                       <p className="text-[11px] text-slate-400 mt-1">
-                        Up to 11 characters (letters, numbers). Must be approved in your Arkesel SMS portal.
+                        Up to 11 characters (letters, numbers). Must be an approved Sender ID in your Arkesel account.
                       </p>
                     </div>
 
                     {/* API Endpoint */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
-                        Arkesel API Endpoint URL
+                        API Endpoint
                       </label>
                       <input
                         type="url"
@@ -1818,25 +1903,69 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                       </p>
                     </div>
 
-                    {/* Enable/Disable switch */}
+                    {/* SMS Service: Enabled / Disabled Selector */}
                     <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
                       <div>
-                        <p className="font-bold text-slate-800 text-xs">Enable Platform SMS Service</p>
+                        <p className="font-bold text-slate-800 text-xs">
+                          SMS Service: <span className={smsIsEnabled ? "text-emerald-700 font-extrabold" : "text-rose-600 font-extrabold"}>{smsIsEnabled ? "Enabled" : "Disabled"}</span>
+                        </p>
                         <p className="text-[11px] text-slate-500">
-                          When enabled, transactional receipts, customer messages, and school alerts will send via Arkesel.
+                          Toggle whether the system actively dispatches SMS receipts and notifications.
                         </p>
                       </div>
-                      <input
-                        type="checkbox"
-                        id="checkbox-sms-enabled"
-                        checked={smsIsEnabled}
-                        onChange={(e) => setSmsIsEnabled(e.target.checked)}
-                        className="h-5 w-5 accent-emerald-600 rounded cursor-pointer"
-                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          id="btn-enable-sms"
+                          onClick={() => {
+                            setSmsIsEnabled(true);
+                            handleToggleGlobalSms(true);
+                          }}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                            smsIsEnabled ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                          }`}
+                        >
+                          <Check className="h-3 w-3" />
+                          Enable SMS
+                        </button>
+                        <button
+                          type="button"
+                          id="btn-disable-sms"
+                          onClick={() => {
+                            setSmsIsEnabled(false);
+                            handleToggleGlobalSms(false);
+                          }}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                            !smsIsEnabled ? 'bg-rose-600 text-white shadow-xs' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                          }`}
+                        >
+                          <X className="h-3 w-3" />
+                          Disable SMS
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Save Button */}
-                    <div className="pt-2 flex justify-end">
+                    {/* Form Action Buttons */}
+                    <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
+                      <div className="flex items-center gap-2">
+                        {/* Test Connection Button */}
+                        <button
+                          type="button"
+                          id="btn-test-connection"
+                          onClick={handleTestConnection}
+                          disabled={isTestingConnection}
+                          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 text-white rounded-xl font-bold text-xs shadow transition cursor-pointer flex items-center gap-2 min-h-[44px]"
+                        >
+                          {isTestingConnection ? (
+                            <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+                          ) : (
+                            <Zap className="h-4 w-4 text-emerald-400" />
+                          )}
+                          Test Connection
+                        </button>
+                      </div>
+
+                      {/* Save SMS Settings Button */}
                       <button
                         type="submit"
                         id="btn-save-sms-config"
@@ -1848,9 +1977,43 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         ) : (
                           <Check className="h-4 w-4" />
                         )}
-                        Save SMS Configuration
+                        Save SMS Settings
                       </button>
                     </div>
+
+                    {/* Connection Test Result Box */}
+                    {isTestingConnection && (
+                      <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl text-xs font-semibold flex items-center gap-2">
+                        <RefreshCw className="h-4 w-4 animate-spin text-blue-600 shrink-0" />
+                        <span>Testing Arkesel connection...</span>
+                      </div>
+                    )}
+
+                    {connectionTestResult && !isTestingConnection && (
+                      <div className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${
+                        connectionTestResult.success 
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-950' 
+                          : 'bg-rose-50 border-rose-200 text-rose-950'
+                      }`}>
+                        <div className="flex items-center gap-2 font-bold">
+                          {connectionTestResult.success ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                          )}
+                          <span>
+                            {connectionTestResult.success 
+                              ? '✓ Arkesel connection successful.' 
+                              : '✕ Arkesel connection failed. Please check your API key and configuration.'}
+                          </span>
+                        </div>
+                        {connectionTestResult.balance !== undefined && (
+                          <p className="text-[11px] text-emerald-800 font-mono pl-6">
+                            Current SMS Balance: {connectionTestResult.balance} units
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </form>
                 </div>
 
@@ -1859,17 +2022,17 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                     <div className="pb-3 border-b border-slate-100">
                       <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
-                        <Smartphone className="h-4 w-4 text-emerald-700" /> Test SMS Tool
+                        <Smartphone className="h-4 w-4 text-emerald-700" /> Send Test SMS
                       </h4>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Send a live test message to verify Arkesel credentials, connection, and balance.
+                        Verify real live dispatch to a Ghanaian mobile number.
                       </p>
                     </div>
 
                     <form onSubmit={handleSendTestSms} className="space-y-4 text-xs">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                          Recipient Phone Number <span className="text-rose-500">*</span>
+                          Test Phone Number <span className="text-rose-500">*</span>
                         </label>
                         <input
                           type="tel"
@@ -1880,13 +2043,13 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                           className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition"
                         />
                         <p className="text-[11px] text-slate-400 mt-1">
-                          Ghana local numbers (024, 055, etc.) are auto-normalized to international standard format.
+                          Ghana local numbers (024, 055, etc.) are auto-normalized to international format (+233...).
                         </p>
                       </div>
 
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                          Test Message Content
+                          Test Message
                         </label>
                         <textarea
                           rows={3}
@@ -1897,6 +2060,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         />
                       </div>
 
+                      {/* Send Test SMS Button */}
                       <button
                         type="submit"
                         id="btn-send-test-sms"
@@ -1908,12 +2072,20 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         ) : (
                           <Send className="h-4 w-4" />
                         )}
-                        {isSendingTestSms ? 'Transmitting to Arkesel...' : 'Send Test SMS'}
+                        {isSendingTestSms ? 'Sending test SMS...' : 'Send Test SMS'}
                       </button>
                     </form>
 
+                    {/* Test In Progress Notification */}
+                    {isSendingTestSms && (
+                      <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl text-xs font-semibold flex items-center gap-2">
+                        <RefreshCw className="h-4 w-4 animate-spin text-blue-600 shrink-0" />
+                        <span>Sending test SMS...</span>
+                      </div>
+                    )}
+
                     {/* Test Result Display */}
-                    {testSmsResult && (
+                    {testSmsResult && !isSendingTestSms && (
                       <div className={`p-4 rounded-xl border text-xs space-y-2 mt-4 transition-all ${
                         testSmsResult.success 
                           ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950' 
@@ -1931,9 +2103,23 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                             {new Date().toLocaleTimeString()}
                           </span>
                         </div>
-                        <p className="font-semibold text-xs leading-relaxed">
-                          {testSmsResult.message}
+                        <p className="font-bold text-xs leading-relaxed flex items-center gap-1.5">
+                          {testSmsResult.success ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                          )}
+                          <span>
+                            {testSmsResult.success 
+                              ? '✓ Test SMS sent successfully.' 
+                              : '✕ Test SMS failed. Please check your Arkesel configuration.'}
+                          </span>
                         </p>
+                        {testSmsResult.message && testSmsResult.message !== 'Test SMS sent successfully' && (
+                          <p className="text-[11px] text-slate-600">
+                            {testSmsResult.message}
+                          </p>
+                        )}
                         {testSmsResult.recipient && (
                           <p className="text-[11px] text-slate-600 font-mono">
                             Target: {testSmsResult.recipient}

@@ -82,6 +82,11 @@ import { PharmacyPOS } from './components/PharmacyPOS';
 // Service Business Module Components
 import { ServiceBusinessDashboard } from './components/ServiceBusinessDashboard';
 
+// Mobile Redesign Navigation & Receivable Components
+import { MobileBottomNav } from './components/MobileBottomNav';
+import { MoreMenu } from './components/MoreMenu';
+import { AccountsReceivable } from './components/AccountsReceivable';
+
 import { getIndustryArchetype } from './lib/businessType';
 
 import { 
@@ -157,9 +162,44 @@ export default function App() {
   // Sales/Reprint specific state
   const [triggerReloadSales, setTriggerReloadSales] = useState(0);
   const [selectedReprintSale, setSelectedReprintSale] = useState<Sale | null>(null);
+  const [resendSmsPhone, setResendSmsPhone] = useState('');
+  const [isResendingSms, setIsResendingSms] = useState(false);
+  const [resendSmsStatus, setResendSmsStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [salesSearch, setSalesSearch] = useState('');
   const [salesFilterEmp, setSalesFilterEmp] = useState('All');
   const [salesFilterPay, setSalesFilterPay] = useState('All');
+
+  const handleResendSmsReceipt = async (sale: Sale) => {
+    const phone = resendSmsPhone.trim() || sale.customerPhone;
+    if (!phone) {
+      alert('Please enter a recipient phone number (e.g. 0244123456).');
+      return;
+    }
+    setIsResendingSms(true);
+    setResendSmsStatus(null);
+    try {
+      const itemsSummary = sale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+      const busCurrency = sale.currency || activeBusiness?.currency || 'GHC';
+      const msg = `${activeBusiness?.name || 'Business'}: Receipt #${sale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(sale.total, busCurrency)}. Thank you for your business!`;
+
+      const res = await db.sendSms({
+        recipient: phone,
+        message: msg,
+        businessId: activeBusiness?.id || sale.businessId,
+        type: 'receipt'
+      });
+
+      if (res.success) {
+        setResendSmsStatus({ success: true, message: `Receipt SMS successfully resent to ${phone}.` });
+      } else {
+        setResendSmsStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
+      }
+    } catch (err: any) {
+      setResendSmsStatus({ success: false, message: err?.message || 'Network error resending SMS.' });
+    } finally {
+      setIsResendingSms(false);
+    }
+  };
 
   // Inventory specific tab states
   const [inventorySearch, setInventorySearch] = useState('');
@@ -895,10 +935,10 @@ export default function App() {
     }
 
     if (currentArchetype === 'service') {
-      let srvTabs = ['Dashboard', 'POS', 'Services', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees'];
+      let srvTabs = ['Dashboard', 'POS', 'Services', 'Customers', 'Accounts Receivable', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees', 'More'];
       if (!isOwnerOrAdmin) {
-        if (role === 'cashier') srvTabs = ['POS', 'Sales'];
-        if (role === 'salesperson') srvTabs = ['POS', 'Customers'];
+        if (role === 'cashier') srvTabs = ['POS', 'Sales', 'More'];
+        if (role === 'salesperson') srvTabs = ['POS', 'Customers', 'More'];
       }
       return srvTabs;
     }
@@ -906,23 +946,23 @@ export default function App() {
     let tabs: string[] = [];
     switch (role) {
       case 'owner':
-        tabs = ['Dashboard', 'POS', 'Services', 'Products', 'Inventory', 'Sales', 'Expenses', 'Customers', 'Employees', 'Reports', 'Settings', 'Branches', 'Returns'];
+        tabs = ['Dashboard', 'POS', 'Services', 'Products', 'Inventory', 'Sales', 'Accounts Receivable', 'Expenses', 'Customers', 'Employees', 'Reports', 'Settings', 'Branches', 'Returns', 'More'];
         break;
       case 'admin':
       case 'SUPER_ADMIN':
-        tabs = ['Dashboard', 'POS', 'Services', 'Products', 'Inventory', 'Sales', 'Expenses', 'Customers', 'Employees', 'Reports', 'Settings', 'Branches', 'Returns', 'Audit Logs'];
+        tabs = ['Dashboard', 'POS', 'Services', 'Products', 'Inventory', 'Sales', 'Accounts Receivable', 'Expenses', 'Customers', 'Employees', 'Reports', 'Settings', 'Branches', 'Returns', 'Audit Logs', 'More'];
         break;
       case 'manager':
-        tabs = ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Expenses', 'Customers', 'Reports', 'Branches', 'Returns'];
+        tabs = ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Accounts Receivable', 'Expenses', 'Customers', 'Reports', 'Branches', 'Returns', 'More'];
         break;
       case 'cashier':
-        tabs = ['POS', 'Sales', 'Returns'];
+        tabs = ['POS', 'Sales', 'Returns', 'More'];
         break;
       case 'salesperson':
-        tabs = ['POS', 'Customers', 'Returns'];
+        tabs = ['POS', 'Customers', 'Returns', 'More'];
         break;
       case 'inventory_staff':
-        tabs = ['Products', 'Inventory', 'Branches', 'Returns'];
+        tabs = ['Products', 'Inventory', 'Branches', 'Returns', 'More'];
         break;
       default:
         tabs = [];
@@ -1109,6 +1149,7 @@ export default function App() {
     { name: 'Products', icon: Package },
     { name: 'Inventory', icon: Package },
     { name: 'Sales', icon: Receipt },
+    { name: 'Accounts Receivable', icon: CreditCard },
     { name: 'Expenses', icon: TrendingDown },
     { name: 'Customers', icon: Users },
     { name: 'Employees', icon: Users },
@@ -1276,9 +1317,9 @@ export default function App() {
         />
       )}
 
-      {/* Dynamic Green Sidebar Panel */}
+      {/* Dynamic Desktop Sidebar Panel */}
       <aside className={`
-        fixed inset-y-0 left-0 w-64 bg-[#064E3B] text-emerald-100 flex flex-col shrink-0 z-50 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen
+        fixed inset-y-0 left-0 w-64 bg-slate-900 text-slate-200 flex flex-col shrink-0 z-50 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Header Branding */}
@@ -1288,24 +1329,24 @@ export default function App() {
               <img 
                 src={activeBusiness.logoUrl} 
                 alt={activeBusiness.name} 
-                className="w-10 h-10 rounded-lg object-cover border border-emerald-400/20 bg-white shadow-lg shadow-emerald-950/40"
+                className="w-10 h-10 rounded-xl object-cover border border-slate-700 bg-white shadow-md"
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-950/50 text-white font-extrabold text-xl">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-md text-white font-extrabold text-xl">
                 {activeBusiness.name.charAt(0)}
               </div>
             )}
             <div className="min-w-0">
               <h1 className="font-bold text-white text-base tracking-tight leading-none truncate">{activeBusiness.name}</h1>
-              <span className="text-[10px] text-emerald-400 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
+              <span className="text-[10px] text-blue-400 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
             </div>
           </div>
 
           {/* Mobile Close Button */}
           <button 
             onClick={() => setIsMobileMenuOpen(false)}
-            className="lg:hidden p-1.5 rounded-lg text-emerald-300 hover:bg-emerald-800/50 hover:text-white cursor-pointer"
+            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
           >
             <X className="h-5 w-5" />
           </button>
@@ -1327,8 +1368,8 @@ export default function App() {
                 }}
                 className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 text-sm font-medium transition-colors cursor-pointer ${
                   activeTab === item.name 
-                    ? 'bg-emerald-800/50 text-white rounded-xl border border-white/10 shadow-sm' 
-                    : 'text-emerald-100/70 hover:bg-white/5 rounded-xl transition-colors'
+                    ? 'bg-blue-600 text-white rounded-xl shadow-xs font-semibold' 
+                    : 'text-slate-400 hover:bg-slate-800/80 hover:text-white rounded-xl transition-colors'
                 }`}
               >
                 <IconComp className="h-5 w-5 text-current" />
@@ -1339,7 +1380,7 @@ export default function App() {
         </div>
 
         {/* Bottom session user profile and Tenant ID details */}
-        <div className="p-6 mt-auto space-y-3">
+        <div className="p-5 mt-auto space-y-3">
           {isAdmin && (
             <button
               onClick={() => {
@@ -1353,22 +1394,22 @@ export default function App() {
             </button>
           )}
 
-          <div className="p-4 bg-emerald-800/30 rounded-2xl border border-white/5 space-y-2">
-            <div className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold mb-1">Tenant ID</div>
-            <div className="text-xs text-white/90 font-mono truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
+          <div className="p-3.5 bg-slate-800/60 rounded-2xl border border-slate-700/50 space-y-2">
+            <div className="text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-1">Tenant ID</div>
+            <div className="text-xs text-slate-200 font-mono truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
             <div className="pt-1">
               <InstallAppButton variant="sidebar" />
             </div>
           </div>
 
-          <div className="p-3 bg-emerald-850/40 rounded-xl flex items-center justify-between text-xs border border-white/5">
+          <div className="p-3 bg-slate-800/90 rounded-xl flex items-center justify-between text-xs border border-slate-700/60">
             <div className="truncate pr-2">
               <p className="font-semibold text-white truncate leading-snug">{currentUser.name}</p>
-              <span className="text-[9px] text-emerald-300/80 font-bold uppercase block mt-0.5">{currentUser.role}</span>
+              <span className="text-[9px] text-blue-400 font-bold uppercase block mt-0.5">{currentUser.role}</span>
             </div>
             <button
               onClick={handleLogout}
-              className="p-1.5 hover:bg-rose-600/20 hover:text-rose-400 rounded-lg transition shrink-0 cursor-pointer text-emerald-200"
+              className="p-1.5 hover:bg-rose-600/20 hover:text-rose-400 rounded-lg transition shrink-0 cursor-pointer text-slate-400"
               title="Sign Out Session"
             >
               <LogOut className="h-4 w-4" />
@@ -1846,7 +1887,86 @@ export default function App() {
                 </div>
               </header>
 
-              <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden overflow-x-auto">
+              {/* Mobile Stock Cards (< md) */}
+              <div className="md:hidden space-y-3">
+                {filteredInventory.map(p => {
+                  const threshold = typeof p.lowStockThreshold === 'number' ? p.lowStockThreshold : 5;
+                  const isOut = p.stockQuantity <= 0;
+                  const isLow = p.stockQuantity < threshold && !isOut;
+                  
+                  let statusLabel = 'In Stock';
+                  let statusClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                  if (isOut) {
+                    statusLabel = 'Out of Stock';
+                    statusClass = 'bg-rose-50 text-rose-700 border-rose-200';
+                  } else if (isLow) {
+                    statusLabel = 'Low Stock';
+                    statusClass = 'bg-amber-50 text-amber-700 border-amber-200';
+                  }
+
+                  return (
+                    <div key={`m-inv-${p.id}`} className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
+                      <div className="flex items-start gap-3">
+                        <img 
+                          src={p.imageUrl || getProductPlaceholderSvg(p.category, p.name)} 
+                          alt={p.name} 
+                          className="h-12 w-12 object-cover rounded-xl border border-slate-200 shrink-0" 
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{p.category}</span>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold ${statusClass}`}>
+                              {statusLabel}
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-slate-900 text-sm mt-0.5 leading-snug">{p.name}</h4>
+                          <div className="flex items-center gap-2 mt-1 font-mono text-[11px] text-slate-500">
+                            <span>SKU: <strong className="text-slate-700">{p.barcode}</strong></span>
+                            <span>&bull;</span>
+                            <span>Stock: <strong className={isOut ? 'text-rose-600 font-black' : isLow ? 'text-amber-600 font-black' : 'text-slate-800 font-black'}>{p.stockQuantity}</strong></span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-medium">Selling Price</span>
+                          <span className="text-base font-black text-blue-600">{formatCurrency(p.sellingPrice, activeBusiness?.currency)}</span>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleStockAdjust(p.id, -1)}
+                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
+                            title="Quick decrement"
+                          >
+                            -1
+                          </button>
+                          <button
+                            onClick={() => handleStockAdjust(p.id, 1)}
+                            className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold cursor-pointer"
+                            title="Quick increment"
+                          >
+                            +1
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredInventory.length === 0 && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-slate-400 text-xs">
+                    <Package className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                    <p className="font-bold text-slate-700">No stock items found</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Try another search filter.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Stock Table (>= md) */}
+              <div className="hidden md:block bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[1000px]">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-xs uppercase tracking-wider">
@@ -1995,7 +2115,7 @@ export default function App() {
               {/* Combine with Expense tracking or isolated list tabs */}
               <div className="flex justify-between items-center border-b border-slate-200">
                 <div className="flex gap-4">
-                  <button className="py-2.5 px-4 text-xs font-black uppercase text-emerald-800 border-b-2 border-emerald-800">
+                  <button className="py-2.5 px-4 text-xs font-black uppercase text-blue-600 border-b-2 border-blue-600">
                     Transactions history & Refunds
                   </button>
                   <button onClick={() => setActiveTab('Settings')} className="py-2.5 px-4 text-xs font-black uppercase text-slate-400 hover:text-slate-600 transition">
@@ -2005,7 +2125,7 @@ export default function App() {
 
                 <button
                   onClick={() => exportSalesToCSV(filteredSalesHistory, activeBusiness ? activeBusiness.name : 'business')}
-                  className="px-3 py-1.5 bg-emerald-800 hover:bg-emerald-900 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors select-none mb-1"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors select-none mb-1"
                 >
                   <FileDown className="h-4 w-4" /> Export CSV Ledger
                 </button>
@@ -2059,8 +2179,84 @@ export default function App() {
                 </div>
               </header>
 
-              {/* Transactions grid list */}
-              <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+              {/* Mobile Transactions Cards (< md) */}
+              <div className="md:hidden space-y-3">
+                {filteredSalesHistory.map(sale => {
+                  const isRefunded = sale.status === 'refunded';
+                  return (
+                    <div key={`m-sale-${sale.id}`} className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-mono text-xs font-bold text-slate-700">{sale.id}</span>
+                          <p className="text-[11px] text-slate-400 mt-0.5">{new Date(sale.createdAt).toLocaleString()}</p>
+                        </div>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                          isRefunded ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                        }`}>
+                          {isRefunded ? 'Refunded' : 'Completed'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs py-2 border-t border-b border-slate-100">
+                        <div className="space-y-0.5">
+                          <p className="font-bold text-slate-800">{sale.customerName || 'Walk-in Customer'}</p>
+                          <p className="text-[10px] text-slate-400">Cashier: {sale.employeeName}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="inline-block px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[10px] font-bold uppercase">
+                            {sale.paymentMethod}
+                          </span>
+                          <p className={`text-base font-black mt-0.5 ${isRefunded ? 'text-slate-400 line-through' : 'text-blue-600'}`}>
+                            ${sale.total.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <button
+                          onClick={() => {
+                            setSelectedReprintSale(sale);
+                            setResendSmsPhone(sale.customerPhone || '');
+                            setResendSmsStatus(null);
+                          }}
+                          className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer text-center"
+                        >
+                          Reprint
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedReprintSale(sale);
+                            setResendSmsPhone(sale.customerPhone || '');
+                            setResendSmsStatus(null);
+                          }}
+                          className="flex-1 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold cursor-pointer inline-flex items-center justify-center gap-1"
+                        >
+                          <Send className="h-3 w-3" />
+                          <span>Resend SMS</span>
+                        </button>
+                        {!isRefunded && !(activeBusiness?.category === 'Professional Services' || activeBusiness?.category === 'Beauty & Wellness' || activeBusiness?.category === 'Beauty and Wellness') && (
+                          <button
+                            onClick={() => handleRefundSale(sale.id)}
+                            className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold cursor-pointer"
+                          >
+                            Refund
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredSalesHistory.length === 0 && (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-slate-400 text-xs">
+                    <p className="font-bold text-slate-700">No transaction receipts found</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Try changing your search or cashier filters.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Transactions grid list (>= md) */}
+              <div className="hidden md:block bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-xs uppercase tracking-wider">
@@ -2096,11 +2292,27 @@ export default function App() {
                           </td>
                           <td className="py-4 px-6 text-right space-x-2">
                             <button
-                              onClick={() => setSelectedReprintSale(sale)}
+                              onClick={() => {
+                                setSelectedReprintSale(sale);
+                                setResendSmsPhone(sale.customerPhone || '');
+                                setResendSmsStatus(null);
+                              }}
                               className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-bold cursor-pointer"
                               title="Reprint Receipt invoice"
                             >
                               Reprint
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedReprintSale(sale);
+                                setResendSmsPhone(sale.customerPhone || '');
+                                setResendSmsStatus(null);
+                              }}
+                              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-bold cursor-pointer inline-flex items-center gap-1"
+                              title="Resend SMS receipt"
+                            >
+                              <Send className="h-3 w-3" />
+                              <span>Resend SMS</span>
                             </button>
                             {!isRefunded && !(activeBusiness?.category === 'Professional Services' || activeBusiness?.category === 'Beauty & Wellness' || activeBusiness?.category === 'Beauty and Wellness') && (
                               <button
@@ -2139,7 +2351,7 @@ export default function App() {
 
                     <div className="text-center pb-4 border-b border-dashed border-slate-200 space-y-1 select-none">
                       <span className={`text-[10px] font-extrabold uppercase tracking-widest ${
-                        selectedReprintSale.status === 'refunded' ? 'text-rose-700' : 'text-emerald-700'
+                        selectedReprintSale.status === 'refunded' ? 'text-rose-700' : 'text-blue-700'
                       }`}>
                         Invoice Ticket &bull; {selectedReprintSale.status === 'refunded' ? 'Refund Void' : 'Payment Approved'}
                       </span>
@@ -2188,12 +2400,47 @@ export default function App() {
 
                       <div className="border-t border-dashed border-slate-200 pt-2 text-[10px] text-slate-500">
                         <p>PAYMENT TYPE: <span className="font-bold uppercase">{selectedReprintSale.paymentMethod}</span></p>
-                        <p>STATUS: <span className="font-bold uppercase text-emerald-800">{selectedReprintSale.status}</span></p>
+                        <p>STATUS: <span className="font-bold uppercase text-blue-700">{selectedReprintSale.status}</span></p>
                       </div>
 
                       <div className="text-center text-[10px] text-slate-400 pt-2 border-t border-slate-100">
                         {activeBusiness.receiptConfig.footerMessage || 'Thank you for your business!'}
                       </div>
+                    </div>
+
+                    {/* Resend SMS Receipt panel */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2 mb-3">
+                      <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                        <Send className="h-3.5 w-3.5 text-blue-600" /> Resend SMS Receipt
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="tel"
+                          value={resendSmsPhone}
+                          onChange={e => setResendSmsPhone(e.target.value)}
+                          placeholder="Recipient Phone (e.g. 0244123456)"
+                          className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                        />
+                        <button
+                          onClick={() => handleResendSmsReceipt(selectedReprintSale)}
+                          disabled={isResendingSms}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition shrink-0"
+                        >
+                          {isResendingSms ? (
+                            <span>Sending...</span>
+                          ) : (
+                            <>
+                              <Send className="h-3 w-3" />
+                              <span>Send</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {resendSmsStatus && (
+                        <p className={`text-[10px] font-semibold ${resendSmsStatus.success ? 'text-blue-700' : 'text-rose-600'}`}>
+                          {resendSmsStatus.message}
+                        </p>
+                      )}
                     </div>
 
                     <button
@@ -2303,7 +2550,39 @@ export default function App() {
               />
             )
           )}
+
+          {(activeTab === 'Accounts Receivable' || activeTab === 'Debtors') && (
+            <AccountsReceivable 
+              business={activeBusiness}
+              currentUser={currentUser}
+              onNavigate={(tab) => {
+                setActiveTab(tab);
+              }}
+            />
+          )}
+
+          {activeTab === 'More' && (
+            <MoreMenu 
+              business={activeBusiness}
+              currentUser={currentUser}
+              authorizedTabs={authorizedTabs}
+              onNavigate={(tab) => {
+                setActiveTab(tab);
+              }}
+              onLogout={handleLogout}
+            />
+          )}
         </div>
+
+        {/* Mobile Bottom Navigation Bar */}
+        <MobileBottomNav 
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            setActiveTab(tab);
+          }}
+          authorizedTabs={authorizedTabs}
+          userRole={currentUser.role}
+        />
       </main>
 
 
