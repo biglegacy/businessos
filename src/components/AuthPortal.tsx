@@ -10,6 +10,7 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'fire
 import { User, Business, REQUIRED_BUSINESS_TYPES, BUSINESS_TYPE_GROUPS } from '../types';
 import { showSuccess, showError } from '../lib/toast';
 import { InstallAppButton } from './InstallAppButton';
+import { IOSAddToHomeScreenOverlay } from './IOSAddToHomeScreenOverlay';
 import { 
   Lock, Mail, Phone, Building, Shield, User as UserIcon, AlertCircle, 
   ArrowRight, CheckCircle2, Clock, KeyRound, ArrowLeft, Eye, EyeOff, X,
@@ -1226,6 +1227,9 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
           </button>
         )}
       </div>
+
+      {/* iOS 'Add to Home Screen' instructional overlay */}
+      <IOSAddToHomeScreenOverlay />
     </div>
   );
 }

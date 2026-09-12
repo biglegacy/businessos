@@ -42,6 +42,7 @@ import { FastFoodIngredients } from './components/FastFoodIngredients';
 import { FastFoodRecipes } from './components/FastFoodRecipes';
 import { FastFoodReports } from './components/FastFoodReports';
 import { InstallAppButton } from './components/InstallAppButton';
+import { IOSAddToHomeScreenOverlay } from './components/IOSAddToHomeScreenOverlay';
 import { PopupNotificationInterface } from './components/PopupNotificationInterface';
 import { RegistrationPopupModal } from './components/RegistrationPopupModal';
 import { SubscriptionReminderModal } from './components/SubscriptionReminderModal';
@@ -274,7 +275,7 @@ export default function App() {
   // Redirect if currently selected tab is disabled or unauthorized
   useEffect(() => {
     if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'SUPER_ADMIN') {
-      const authorized = getAuthorizedTabs(currentUser.role);
+      const authorized = getAuthorizedTabs(currentUser.role, currentUser.permissions);
       if (activeTab && !authorized.includes(activeTab)) {
         setActiveTab(authorized[0] || 'Dashboard');
       }
@@ -754,13 +755,116 @@ export default function App() {
     setActiveBusiness(null);
   };
 
-  const getAuthorizedTabs = (role: string): string[] => {
+  const getAuthorizedTabs = (role: string, userPermissions?: string[]): string[] => {
     const isOwnerOrAdmin = ['owner', 'admin', 'SUPER_ADMIN'].includes(role);
 
     const isTravelBiz = activeBusiness?.category === 'Travel & Tour' || 
                         activeBusiness?.businessType === 'Travel & Tour' || 
                         activeBusiness?.category === 'Travel Agencies' || 
                         activeBusiness?.businessType === 'Travel Agencies';
+
+    const isSalon = activeBusiness?.category === 'Salon & Barbers' || activeBusiness?.businessType === 'Salon & Barbers' || activeBusiness?.category === 'Salon' || activeBusiness?.businessType === 'Salon';
+    const isLaundry = activeBusiness?.category === 'Laundry Services' || activeBusiness?.businessType === 'Laundry Services';
+    const currentArchetype = getIndustryArchetype(activeBusiness?.category, activeBusiness?.businessType);
+    const isFastFood = activeBusiness?.category === 'Fast Food' || activeBusiness?.businessType === 'Fast Food';
+    const isRestaurant = activeBusiness?.category === 'Restaurant' || activeBusiness?.businessType === 'Restaurant';
+
+    // If custom permissions are explicitly assigned to this user and user is not owner/admin, enforce them directly
+    if (userPermissions && Array.isArray(userPermissions) && userPermissions.length > 0 && !isOwnerOrAdmin) {
+      const explicitTabs: string[] = [];
+      
+      userPermissions.forEach(perm => {
+        switch (perm) {
+          case 'POS':
+            if (isFastFood) explicitTabs.push('Fast Food POS');
+            else if (isRestaurant) explicitTabs.push('Restaurant POS');
+            else if (isSalon) explicitTabs.push('POS', 'Salon POS');
+            else explicitTabs.push('POS');
+            break;
+          case 'Products':
+            if (isFastFood || isRestaurant) explicitTabs.push('Menu Management');
+            else if (currentArchetype === 'service') explicitTabs.push('Services');
+            else explicitTabs.push('Products');
+            break;
+          case 'Inventory':
+            if (isFastFood) explicitTabs.push('Ingredient Inventory', 'Recipe Management');
+            else if (isRestaurant) explicitTabs.push('Ingredients', 'Recipe Management', 'Categories');
+            else explicitTabs.push('Inventory');
+            break;
+          case 'Sales':
+            if (isRestaurant) explicitTabs.push('Orders');
+            else if (isLaundry) explicitTabs.push('Laundry Orders', 'Sales');
+            else explicitTabs.push('Sales');
+            break;
+          case 'Customers':
+            explicitTabs.push(isTravelBiz ? 'Travel Customers' : 'Customers');
+            break;
+          case 'Accounts Receivable':
+            explicitTabs.push('Accounts Receivable');
+            break;
+          case 'Expenses':
+            explicitTabs.push('Expenses');
+            break;
+          case 'Reports':
+            explicitTabs.push(isTravelBiz ? 'Travel Reports' : 'Reports');
+            break;
+          case 'Branches':
+            explicitTabs.push('Branches');
+            break;
+          case 'Returns':
+            explicitTabs.push('Returns');
+            break;
+          case 'Employees':
+            explicitTabs.push('Employees');
+            break;
+          case 'Settings':
+            explicitTabs.push('Settings');
+            break;
+          case 'Dashboard':
+            explicitTabs.push('Dashboard');
+            break;
+          default:
+            explicitTabs.push(perm);
+            break;
+        }
+      });
+
+      if (!explicitTabs.includes('More')) {
+        explicitTabs.push('More');
+      }
+
+      let permTabs = explicitTabs;
+
+      if (!db.isFeatureEnabled('inventory_management')) {
+        permTabs = permTabs.filter(t => t !== 'Inventory' && t !== 'Ingredients' && t !== 'Ingredient Inventory' && t !== 'Recipe Management');
+      }
+      if (!db.isFeatureEnabled('product_management')) {
+        permTabs = permTabs.filter(t => t !== 'Products');
+      }
+      if (!db.isFeatureEnabled('service_management')) {
+        permTabs = permTabs.filter(t => t !== 'Services');
+      }
+      if (!db.isFeatureEnabled('pos_system')) {
+        permTabs = permTabs.filter(t => t !== 'POS' && t !== 'Fast Food POS' && t !== 'Restaurant POS' && t !== 'Salon POS');
+      }
+      if (!db.isFeatureEnabled('customer_management')) {
+        permTabs = permTabs.filter(t => t !== 'Customers' && t !== 'Travel Customers');
+      }
+      if (!db.isFeatureEnabled('employee_management')) {
+        permTabs = permTabs.filter(t => t !== 'Employees');
+      }
+      if (!db.isFeatureEnabled('reports_analytics')) {
+        permTabs = permTabs.filter(t => t !== 'Reports' && t !== 'Travel Reports');
+      }
+      if (!db.isFeatureEnabled('branch_management')) {
+        permTabs = permTabs.filter(t => t !== 'Branches');
+      }
+      if (!db.isFeatureEnabled('returns_management')) {
+        permTabs = permTabs.filter(t => t !== 'Returns');
+      }
+
+      return Array.from(new Set(permTabs));
+    }
 
     if (isTravelBiz) {
       const isOwnerOrManager = ['owner', 'manager'].includes(role) || isOwnerOrAdmin;
@@ -808,6 +912,13 @@ export default function App() {
           'Travel Partners',
           'Travel Reports'
         );
+      } else if (role === 'pos_inventory_staff') {
+        travelTabs.push(
+          'Travel Customers',
+          'Travel Invoices',
+          'Travel Payments',
+          'Bookings Management'
+        );
       } else {
         travelTabs.push(
           'Travel Customers',
@@ -827,11 +938,12 @@ export default function App() {
       return travelTabs;
     }
 
-    if (activeBusiness?.category === 'Fast Food' || activeBusiness?.businessType === 'Fast Food') {
+    if (isFastFood) {
       const isOwnerOrManager = ['owner', 'manager'].includes(role) || isOwnerOrAdmin;
       const isCashier = role === 'cashier';
       const isSalesperson = role === 'salesperson';
       const isInventoryStaff = role === 'inventory_staff';
+      const isPosInvStaff = role === 'pos_inventory_staff';
 
       let ffTabs: string[] = ['Dashboard'];
 
@@ -848,6 +960,8 @@ export default function App() {
           'Employees',
           'Settings'
         );
+      } else if (isPosInvStaff) {
+        ffTabs = ['Fast Food POS', 'Menu Management', 'Ingredient Inventory', 'Customers'];
       } else if (isCashier) {
         ffTabs.push('Fast Food POS', 'Kitchen Display', 'Customers');
       } else if (isSalesperson) {
@@ -859,11 +973,12 @@ export default function App() {
       return ffTabs;
     }
 
-    if (activeBusiness?.category === 'Restaurant' || activeBusiness?.businessType === 'Restaurant') {
+    if (isRestaurant) {
       const isOwnerOrManager = ['owner', 'manager'].includes(role) || isOwnerOrAdmin;
       const isCashier = role === 'cashier';
       const isSalesperson = role === 'salesperson';
       const isInventoryStaff = role === 'inventory_staff';
+      const isPosInvStaff = role === 'pos_inventory_staff';
 
       // Build precise restaurant tab list allowed for this role
       let restTabs: string[] = ['Dashboard'];
@@ -883,6 +998,8 @@ export default function App() {
           'Reports',
           'Settings'
         );
+      } else if (isPosInvStaff) {
+        restTabs = ['Restaurant POS', 'Orders', 'Menu Management', 'Ingredients', 'Recipe Management', 'Categories'];
       } else if (isCashier) {
         restTabs.push('Restaurant POS', 'Kitchen Display', 'Tables', 'Orders');
       } else if (isSalesperson) {
@@ -893,7 +1010,6 @@ export default function App() {
 
       // Bypass any feature flags for owner / admin (Full Access = true)
       if (!isOwnerOrAdmin) {
-        // Respect global feature settings on top of role checks
         if (!db.isFeatureEnabled('inventory_management')) {
           restTabs = restTabs.filter(t => t !== 'Ingredients' && t !== 'Recipe Management');
         }
@@ -911,25 +1027,28 @@ export default function App() {
       return restTabs;
     }
 
-    const isSalon = activeBusiness?.category === 'Salon & Barbers' || activeBusiness?.businessType === 'Salon & Barbers' || activeBusiness?.category === 'Salon' || activeBusiness?.businessType === 'Salon';
     if (isSalon) {
+      if (role === 'pos_inventory_staff') {
+        return ['POS', 'Salon POS', 'Products', 'Sales'];
+      }
       let salonTabs: string[] = ['Dashboard', 'POS', 'Salon POS', 'Products', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees'];
       return salonTabs;
     }
 
-    const isLaundry = activeBusiness?.category === 'Laundry Services' || activeBusiness?.businessType === 'Laundry Services';
-
     if (isLaundry) {
+      if (role === 'pos_inventory_staff') {
+        return ['POS', 'Laundry Orders', 'Sales'];
+      }
       let lndTabs: string[] = ['Dashboard', 'Laundry Orders', 'POS', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees'];
       return lndTabs;
     }
 
-    const currentArchetype = getIndustryArchetype(activeBusiness?.category, activeBusiness?.businessType);
     if (currentArchetype === 'pharmacy') {
       let pharmTabs = ['Dashboard', 'POS', 'Products', 'Inventory', 'Customers', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees', 'Returns'];
       if (!isOwnerOrAdmin) {
-        if (role === 'cashier') pharmTabs = ['POS', 'Sales'];
-        if (role === 'inventory_staff') pharmTabs = ['Products', 'Inventory', 'Returns'];
+        if (role === 'pos_inventory_staff') pharmTabs = ['POS', 'Products', 'Inventory', 'Sales'];
+        else if (role === 'cashier') pharmTabs = ['POS', 'Sales'];
+        else if (role === 'inventory_staff') pharmTabs = ['Products', 'Inventory', 'Returns'];
       }
       return pharmTabs;
     }
@@ -937,8 +1056,9 @@ export default function App() {
     if (currentArchetype === 'service') {
       let srvTabs = ['Dashboard', 'POS', 'Services', 'Customers', 'Accounts Receivable', 'Sales', 'Expenses', 'Reports', 'Settings', 'Employees', 'More'];
       if (!isOwnerOrAdmin) {
-        if (role === 'cashier') srvTabs = ['POS', 'Sales', 'More'];
-        if (role === 'salesperson') srvTabs = ['POS', 'Customers', 'More'];
+        if (role === 'pos_inventory_staff') srvTabs = ['POS', 'Services', 'Sales', 'More'];
+        else if (role === 'cashier') srvTabs = ['POS', 'Sales', 'More'];
+        else if (role === 'salesperson') srvTabs = ['POS', 'Customers', 'More'];
       }
       return srvTabs;
     }
@@ -954,6 +1074,9 @@ export default function App() {
         break;
       case 'manager':
         tabs = ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Accounts Receivable', 'Expenses', 'Customers', 'Reports', 'Branches', 'Returns', 'More'];
+        break;
+      case 'pos_inventory_staff':
+        tabs = ['POS', 'Products', 'Inventory', 'Sales', 'More'];
         break;
       case 'cashier':
         tabs = ['POS', 'Sales', 'Returns', 'More'];
@@ -1043,7 +1166,7 @@ export default function App() {
     );
   }
 
-  const authorizedTabs = getAuthorizedTabs(currentUser.role);
+  const authorizedTabs = getAuthorizedTabs(currentUser.role, currentUser.permissions);
 
   // Sidebar navigation options
   const currentArchetype = getIndustryArchetype(activeBusiness?.category, activeBusiness?.businessType);
@@ -1570,7 +1693,7 @@ export default function App() {
         </header>
 
         {/* Scrollable Workspace Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 bg-[#F8FAFC]">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 pb-28 lg:pb-10 bg-[#F8FAFC]">
           {/* Active subscription renewal warning banner */}
           {activeBusiness?.subscriptionStatus === 'active' && activeBusiness?.subscriptionCycleEndDate && (() => {
             const diffTime = new Date(activeBusiness.subscriptionCycleEndDate).getTime() - new Date().getTime();
@@ -2691,6 +2814,9 @@ export default function App() {
         business={activeBusiness}
         onNavigateTab={(tab) => setActiveTab(tab)}
       />
+
+      {/* Dedicated iOS 'Add to Home Screen' instructional overlay */}
+      <IOSAddToHomeScreenOverlay />
 
       <ToastContainer />
     </div>

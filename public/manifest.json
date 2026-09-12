@@ -2,15 +2,32 @@
   "id": "/",
   "name": "BusinessOS",
   "short_name": "BusinessOS",
-  "description": "Complete Multi-Tenant Cloud POS & Business Operating System featuring private business workspaces, robust user roles, real-time inventory, sales, expenses, and powerful analytics.",
+  "description": "Complete Multi-Tenant Cloud POS & Business Operating System featuring private workspaces, inventory, sales, expenses, and analytics.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "window-controls-overlay"
+  ],
   "orientation": "any",
   "background_color": "#064E3B",
   "theme_color": "#064E3B",
-  "categories": ["business", "finance", "productivity", "education"],
+  "categories": [
+    "business",
+    "finance",
+    "productivity",
+    "utilities"
+  ],
+  "prefer_related_applications": false,
   "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
     {
       "src": "/icon-192.png",
       "sizes": "192x192",

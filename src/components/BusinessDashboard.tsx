@@ -117,9 +117,9 @@ export function BusinessDashboard({ business, user, onNavigate }: BusinessDashbo
   });
 
   // Permissions
-  const canAccessReceivables = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'accountant'].includes(user.role);
-  const canAddProduct = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'inventory_staff'].includes(user.role);
-  const canManageCustomers = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'cashier'].includes(user.role);
+  const canAccessReceivables = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'accountant'].includes(user.role) || (user.permissions && user.permissions.includes('Accounts Receivable'));
+  const canAddProduct = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'inventory_staff', 'pos_inventory_staff'].includes(user.role) || (user.permissions && user.permissions.includes('Products'));
+  const canManageCustomers = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'cashier'].includes(user.role) || (user.permissions && user.permissions.includes('Customers'));
 
   // --- CHART COMPUTATIONS ---
   const last7Days = Array.from({ length: 7 }, (_, i) => {

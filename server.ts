@@ -2079,6 +2079,19 @@ app.all('/api/payment/webhook', (req, res) => {
   res.json({ status: 'success', message: 'Paystack webhook acknowledged', timestamp: new Date().toISOString() });
 });
 
+// PWA Service Worker & Manifest Headers for iOS Safari & WebKit compliance
+app.use((req, res, next) => {
+  if (req.path === '/sw.js') {
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  } else if (req.path === '/manifest.json' || req.path === '/manifest.webmanifest') {
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  next();
+});
+
 // Mount Vite middleware or serve static dist folder
 async function start() {
   if (process.env.NODE_ENV !== 'production') {

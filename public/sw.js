@@ -1,4 +1,4 @@
-const CACHE_NAME = 'businessos-cache-v2';
+const CACHE_NAME = 'businessos-cache-v4';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -13,13 +13,13 @@ const ASSETS_TO_CACHE = [
   'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap'
 ];
 
-// Perform service worker installation and pre-cache key static assets individually to tolerate missing files
+// Perform service worker installation and pre-cache key static assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       const cachePromises = ASSETS_TO_CACHE.map((url) => {
         return cache.add(url).catch((err) => {
-          console.warn(`Service Worker: soft skipped caching non-critical or environment-specific url: ${url}`, err);
+          console.warn(`Service Worker: Soft skipped caching asset ${url}:`, err);
         });
       });
       return Promise.all(cachePromises);
@@ -28,14 +28,14 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate the service worker and clean up old caches
+// Activate service worker, clear old caches, claim clients immediately
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
-            console.log('Service Worker: clearing old cache', key);
+            console.log('Service Worker: clearing old cache version:', key);
             return caches.delete(key);
           }
         })
@@ -45,18 +45,35 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Listen for skip waiting messages from the client
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 // Intercept fetch requests and apply strategic caching rules
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const requestUrl = new URL(event.request.url);
 
+  // Exclude API calls and Firebase backend queries from service worker interception
+  if (
+    requestUrl.pathname.startsWith('/api/') ||
+    requestUrl.hostname.includes('firestore.googleapis.com') ||
+    requestUrl.hostname.includes('identitytoolkit.googleapis.com') ||
+    requestUrl.hostname.includes('securetoken.googleapis.com')
+  ) {
+    return;
+  }
+
   // 1. Navigation requests (HTML routes / client-side routing) -> Network-First, fallback to cached index shell
   if (event.request.mode === 'navigate' || event.request.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
-          if (networkResponse.status === 200) {
+          if (networkResponse && networkResponse.status === 200) {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(event.request, responseToCache);
@@ -64,9 +81,16 @@ self.addEventListener('fetch', (event) => {
           }
           return networkResponse;
         })
-        .catch(() => {
-          // Offline fallback: load the main cached single-page application shell
-          return caches.match('/') || caches.match('/index.html');
+        .catch(async () => {
+          // Robust offline fallback for iOS Safari and Chromium
+          const cachedIndex = await caches.match('/index.html');
+          if (cachedIndex) return cachedIndex;
+          const cachedRoot = await caches.match('/');
+          if (cachedRoot) return cachedRoot;
+          return new Response(
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BusinessOS Offline</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:2rem;text-align:center;background:#064E3B;color:white;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}h2{margin-bottom:0.5rem}p{opacity:0.8;font-size:0.9rem}</style></head><body><h2>BusinessOS Offline</h2><p>You are currently offline. Please connect to the internet to load BusinessOS.</p></body></html>',
+            { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+          );
         })
     );
     return;
@@ -77,7 +101,7 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request)
         .then((networkResponse) => {
-          if (networkResponse.status === 200) {
+          if (networkResponse && networkResponse.status === 200) {
             const isSameOrigin = requestUrl.origin === self.location.origin;
             const isCDN = requestUrl.hostname.includes('fonts.googleapis.com') ||
                           requestUrl.hostname.includes('fonts.gstatic.com') ||
@@ -94,14 +118,11 @@ self.addEventListener('fetch', (event) => {
         })
         .catch((err) => {
           console.warn('Service Worker: Network fetch failed for resource:', event.request.url, err);
-          // If network fails and there is no cached fallback, throw error to let resource handle it or return undefined
           if (cachedResponse) return cachedResponse;
-          throw err;
+          return new Response('', { status: 408, statusText: 'Request offline' });
         });
 
-      // Instantly serve from cache if available, but keep fetching in background to update cache (Stale-While-Revalidate)
       return cachedResponse || fetchPromise;
     })
   );
 });
-

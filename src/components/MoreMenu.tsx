@@ -35,8 +35,9 @@ export const MoreMenu: React.FC<MoreMenuProps> = ({
   const isOwnerOrAdmin = ['owner', 'admin', 'SUPER_ADMIN'].includes(currentUser.role);
   const isManager = currentUser.role === 'manager';
 
-  // Accounts Receivable permitted roles
-  const canAccessReceivables = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'accountant'].includes(currentUser.role);
+  // Accounts Receivable permitted roles or explicit permission
+  const canAccessReceivables = ['owner', 'manager', 'admin', 'SUPER_ADMIN', 'accountant'].includes(currentUser.role) || 
+    Boolean(currentUser.permissions?.includes('Accounts Receivable'));
 
   // Filter items strictly based on role permissions and authorized tabs
   const secondaryItems = [

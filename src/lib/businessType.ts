@@ -441,6 +441,7 @@ export function getTabsForBusiness(
   const isManager = role === 'manager';
   const isCashier = role === 'cashier' || role === 'salesperson';
   const isInventoryStaff = role === 'inventory_staff';
+  const isPosInventoryStaff = role === 'pos_inventory_staff';
 
   switch (archetype) {
     case 'pharmacy':
@@ -476,6 +477,9 @@ export function getTabsForBusiness(
           'Sales',
           'Reports'
         ];
+      }
+      if (isPosInventoryStaff) {
+        return ['POS', 'Medicines & Products', 'Inventory', 'Sales'];
       }
       if (isCashier) {
         return ['POS', 'Sales', 'Prescriptions', 'Customers'];
@@ -516,6 +520,9 @@ export function getTabsForBusiness(
           'Expenses',
           'Reports'
         ];
+      }
+      if (isPosInventoryStaff) {
+        return ['POS', 'Products', 'Inventory', 'Sales'];
       }
       if (isCashier) {
         return ['POS', 'Sales', 'Customers'];
@@ -626,6 +633,9 @@ export function getTabsForBusiness(
           'Suppliers',
           'Reports'
         ];
+      }
+      if (isPosInventoryStaff) {
+        return ['POS', 'Products', 'Inventory', 'Sales'];
       }
       if (isCashier) {
         return ['POS', 'Sales', 'Customers'];

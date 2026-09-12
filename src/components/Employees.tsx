@@ -16,61 +16,102 @@ interface EmployeesProps {
   currentUser: User;
 }
 
-// Map roles to descriptive permission capabilities
-const ROLE_PERMISSIONS: Record<UserRole, { title: string; caps: string[] }> = {
-  owner: {
-    title: 'Owner / Administrator',
-    caps: ['Point of Sale (POS)', 'Inventory & Stock Refilling', 'Advanced Business Reports', 'Employee Roster Directory', 'Custom Receipts & Portals']
-  },
-  manager: {
-    title: 'Operational Manager',
-    caps: ['Point of Sale (POS)', 'Inventory & Stock Refilling', 'Customer Relations Directory', 'General Reports']
+// Map roles to descriptive permission capabilities and default tab access
+export const ROLE_PERMISSIONS: Record<string, { title: string; caps: string[]; defaultPermissions: string[] }> = {
+  pos_inventory_staff: {
+    title: 'POS & Inventory Staff',
+    caps: ['Point of Sale (POS)', 'Products & Services Catalog', 'Inventory & Stock Level Tracking', 'Sales History & Receipts'],
+    defaultPermissions: ['POS', 'Products', 'Inventory', 'Sales']
   },
   cashier: {
     title: 'Cashier Clerk',
-    caps: ['Point of Sale (POS)', 'Recent Transaction History', 'Invoice Reprinting']
+    caps: ['Point of Sale (POS)', 'Recent Transaction History', 'Invoice Reprinting'],
+    defaultPermissions: ['POS', 'Sales', 'Returns']
   },
   salesperson: {
     title: 'Sales Associate',
-    caps: ['Point of Sale (POS)', 'Customer Relations Directory']
+    caps: ['Point of Sale (POS)', 'Customer Relations Directory'],
+    defaultPermissions: ['POS', 'Sales', 'Customers']
   },
   inventory_staff: {
     title: 'Inventory Specialist',
-    caps: ['Inventory Catalog Listing', 'Stock Level Adjustment']
+    caps: ['Inventory Catalog Listing', 'Stock Level Adjustment'],
+    defaultPermissions: ['Products', 'Inventory', 'Returns']
+  },
+  manager: {
+    title: 'Operational Manager',
+    caps: ['Point of Sale (POS)', 'Inventory & Stock Refilling', 'Customer Relations Directory', 'General Reports'],
+    defaultPermissions: ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Accounts Receivable', 'Expenses', 'Customers', 'Reports', 'Branches', 'Returns']
+  },
+  owner: {
+    title: 'Owner / Administrator',
+    caps: ['Point of Sale (POS)', 'Inventory & Stock Refilling', 'Advanced Business Reports', 'Employee Roster Directory', 'Custom Receipts & Portals'],
+    defaultPermissions: ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Customers', 'Accounts Receivable', 'Expenses', 'Reports', 'Branches', 'Returns', 'Employees', 'Settings']
   },
   admin: {
     title: 'Platform Super Admin',
-    caps: ['Full Global System Control']
+    caps: ['Full Global System Control'],
+    defaultPermissions: ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Customers', 'Accounts Receivable', 'Expenses', 'Reports', 'Branches', 'Returns', 'Employees', 'Settings']
   },
   SUPER_ADMIN: {
     title: 'Platform Super Admin',
-    caps: ['Full Global System Control']
+    caps: ['Full Global System Control'],
+    defaultPermissions: ['Dashboard', 'POS', 'Products', 'Inventory', 'Sales', 'Customers', 'Accounts Receivable', 'Expenses', 'Reports', 'Branches', 'Returns', 'Employees', 'Settings']
   },
   principal: {
     title: 'School Principal',
-    caps: ['Full School Oversight', 'Student Admissions', 'Staff & Faculty Management', 'Fee & Invoice Tracking', 'Academics & Reports']
+    caps: ['Full School Oversight', 'Student Admissions', 'Staff & Faculty Management', 'Fee & Invoice Tracking', 'Academics & Reports'],
+    defaultPermissions: ['Dashboard', 'Employees', 'Reports', 'Settings']
   },
   administrator: {
     title: 'School Administrator',
-    caps: ['Admissions & Records', 'Class Schedules', 'Fee Collection', 'Attendance Audits', 'SMS Broadcasts']
+    caps: ['Admissions & Records', 'Class Schedules', 'Fee Collection', 'Attendance Audits', 'SMS Broadcasts'],
+    defaultPermissions: ['Dashboard', 'Employees', 'Reports']
   },
   accountant: {
     title: 'School Bursar / Accountant',
-    caps: ['Fee Invoicing', 'Payment Processing', 'Salaries & Payroll', 'Expense Auditing', 'Financial Statements']
+    caps: ['Fee Invoicing', 'Payment Processing', 'Salaries & Payroll', 'Expense Auditing', 'Financial Statements'],
+    defaultPermissions: ['Dashboard', 'Expenses', 'Reports']
   },
   teacher: {
     title: 'Teacher / Faculty',
-    caps: ['Class Attendance', 'Grading & Report Cards', 'Timetable Viewer', 'Class Announcements']
+    caps: ['Class Attendance', 'Grading & Report Cards', 'Timetable Viewer', 'Class Announcements'],
+    defaultPermissions: ['Dashboard']
   },
   parent: {
     title: 'Parent / Guardian',
-    caps: ['Student Profile', 'Fee Statements & Pay', 'Attendance History', 'Academic Reports Cards', 'School Notices']
+    caps: ['Student Profile', 'Fee Statements & Pay', 'Attendance History', 'Academic Reports Cards', 'School Notices'],
+    defaultPermissions: ['Dashboard']
   },
   student: {
     title: 'Enrolled Student',
-    caps: ['Class Schedule', 'My Attendance', 'Grades & Results', 'School Notices']
+    caps: ['Class Schedule', 'My Attendance', 'Grades & Results', 'School Notices'],
+    defaultPermissions: ['Dashboard']
   }
 };
+
+export interface PermissionModuleItem {
+  id: string;
+  name: string;
+  description: string;
+  category: 'Core Operations' | 'Catalog & Inventory' | 'Back Office & Management';
+}
+
+export const AVAILABLE_PERMISSIONS: PermissionModuleItem[] = [
+  { id: 'POS', name: 'POS', description: 'Point of Sale register, item scanning, checkout & receipts', category: 'Core Operations' },
+  { id: 'Products', name: 'Products', description: 'Product and service catalog, pricing, variants & SKU management', category: 'Catalog & Inventory' },
+  { id: 'Inventory', name: 'Inventory', description: 'Stock quantity audits, stock adjustments & low-stock warnings', category: 'Catalog & Inventory' },
+  { id: 'Sales', name: 'Sales', description: 'Sales order history, customer invoices, reprinting & dispatch', category: 'Core Operations' },
+  { id: 'Dashboard', name: 'Dashboard', description: 'Business overview, KPIs, real-time charts & summaries', category: 'Back Office & Management' },
+  { id: 'Customers', name: 'Customers', description: 'Customer directory, client contact cards & purchase histories', category: 'Core Operations' },
+  { id: 'Accounts Receivable', name: 'Accounts Receivable', description: 'Customer credit ledgers, debt aging & payment tracking', category: 'Catalog & Inventory' },
+  { id: 'Expenses', name: 'Expenses', description: 'Business expenses, operational costs & supplier invoices', category: 'Catalog & Inventory' },
+  { id: 'Reports', name: 'Reports', description: 'Sales reports, profit & loss, tax statements & analytics', category: 'Back Office & Management' },
+  { id: 'Branches', name: 'Branches', description: 'Branch outlets, physical registers & branch inventory', category: 'Back Office & Management' },
+  { id: 'Returns', name: 'Returns', description: 'Customer returns, product refunds & restocking', category: 'Core Operations' },
+  { id: 'Employees', name: 'Employees', description: 'Team directory, employee roles & permission assignments', category: 'Back Office & Management' },
+  { id: 'Settings', name: 'Settings', description: 'Store setup, currency, receipt printer & business profiles', category: 'Back Office & Management' },
+];
 
 export function Employees({ business, currentUser }: EmployeesProps) {
   const [trigger, setTrigger] = useState(0);
@@ -78,26 +119,95 @@ export function Employees({ business, currentUser }: EmployeesProps) {
 
   const branches = db.getBranches(business.id);
 
-  // Forms
+  // Forms & Edit State
   const [isCreating, setIsCreating] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<User | null>(null);
-  const [isEditingRole, setIsEditingRole] = useState(false);
-  const [editRoleValue, setEditRoleValue] = useState<UserRole>('cashier');
+  const [editRoleValue, setEditRoleValue] = useState<string>('pos_inventory_staff');
+  const [editPermissions, setEditPermissions] = useState<string[]>([]);
   const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>([]);
   const [editBranchIds, setEditBranchIds] = useState<string[]>([]);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   React.useEffect(() => {
-    setIsEditingRole(false);
+    setSaveSuccessMessage(null);
     if (selectedStaff) {
       setEditRoleValue(selectedStaff.role);
+      const initialPerms = selectedStaff.permissions && selectedStaff.permissions.length > 0
+        ? [...selectedStaff.permissions]
+        : (ROLE_PERMISSIONS[selectedStaff.role]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales']);
+      setEditPermissions(initialPerms);
       setEditBranchIds(selectedStaff.branchIds || (selectedStaff.branchId ? [selectedStaff.branchId] : []));
     }
   }, [selectedStaff?.id]);
 
+  const handleRoleSelectChange = (newRole: string) => {
+    setEditRoleValue(newRole);
+    const defaults = ROLE_PERMISSIONS[newRole]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales'];
+    setEditPermissions([...defaults]);
+  };
+
+  const handleTogglePermission = (permId: string) => {
+    setEditPermissions(prev =>
+      prev.includes(permId)
+        ? prev.filter(p => p !== permId)
+        : [...prev, permId]
+    );
+  };
+
+  const handleSelectAllPermissions = () => {
+    setEditPermissions(AVAILABLE_PERMISSIONS.map(p => p.id));
+  };
+
+  const handleClearAllPermissions = () => {
+    setEditPermissions([]);
+  };
+
+  const handleResetToRoleDefaults = () => {
+    const defaults = ROLE_PERMISSIONS[editRoleValue]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales'];
+    setEditPermissions([...defaults]);
+  };
+
+  const handleSavePermissions = () => {
+    if (!selectedStaff) return;
+
+    const updatedUser: User = {
+      ...selectedStaff,
+      role: editRoleValue as UserRole,
+      permissions: [...new Set(editPermissions)],
+      branchId: editBranchIds[0] || '',
+      branchIds: editBranchIds,
+      updatedAt: new Date().toISOString()
+    };
+
+    db.saveUser(updatedUser);
+
+    db.addActivityLog(business.id, {
+      userId: currentUser.id,
+      userName: currentUser.name,
+      action: 'Staff Role & Permissions Updated',
+      details: `Saved role "${ROLE_PERMISSIONS[editRoleValue]?.title || editRoleValue}" and permissions [${editPermissions.join(', ')}] for employee "${selectedStaff.name}".`
+    });
+
+    setSelectedStaff(updatedUser);
+    setSaveSuccessMessage("Employee role and permissions saved successfully.");
+    forceUpdate();
+  };
+
+  const handleCancelChanges = () => {
+    if (!selectedStaff) return;
+    setEditRoleValue(selectedStaff.role);
+    const initialPerms = selectedStaff.permissions && selectedStaff.permissions.length > 0
+      ? [...selectedStaff.permissions]
+      : (ROLE_PERMISSIONS[selectedStaff.role]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales']);
+    setEditPermissions(initialPerms);
+    setEditBranchIds(selectedStaff.branchIds || (selectedStaff.branchId ? [selectedStaff.branchId] : []));
+    setSaveSuccessMessage(null);
+  };
+
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
-  const [staffRole, setStaffRole] = useState<UserRole>('cashier');
+  const [staffRole, setStaffRole] = useState<UserRole>('pos_inventory_staff');
 
   const employees = db.getUsers().filter(u => u.businessId === business.id);
   const logs = db.getLogs(business.id);
@@ -116,15 +226,19 @@ export function Employees({ business, currentUser }: EmployeesProps) {
       return;
     }
 
+    const initialPermissions = ROLE_PERMISSIONS[staffRole]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales'];
+
     const newEmp: User = {
       id: 'u-' + Math.random().toString(36).substring(2, 9),
       businessId: business.id,
       name: staffName,
       email: staffEmail,
       role: staffRole,
+      permissions: initialPermissions,
       status: 'active',
       password: staffPassword,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       branchId: selectedBranchIds[0] || '',
       branchIds: selectedBranchIds
     };
@@ -137,7 +251,7 @@ export function Employees({ business, currentUser }: EmployeesProps) {
       userId: currentUser.id,
       userName: currentUser.name,
       action: 'Staff Onboarded',
-      details: `Created new employee profile "${staffName}" assigned to role: ${staffRole} with branch access.`
+      details: `Created new employee profile "${staffName}" assigned to role: ${ROLE_PERMISSIONS[staffRole]?.title || staffRole} with permissions [${initialPermissions.join(', ')}].`
     });
 
     setIsCreating(false);
@@ -217,7 +331,9 @@ export function Employees({ business, currentUser }: EmployeesProps) {
         <div className="flex-1 overflow-y-auto p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {employees.map(emp => {
-              const pInfo = ROLE_PERMISSIONS[emp.role] || { title: 'Unknown Role', caps: [] };
+              const pInfo = ROLE_PERMISSIONS[emp.role] || { title: 'Unknown Role', caps: [], defaultPermissions: [] };
+              const defaultPerms = ROLE_PERMISSIONS[emp.role]?.defaultPermissions || [];
+              const effectivePerms = (emp.permissions && emp.permissions.length > 0) ? emp.permissions : defaultPerms;
               const isSelf = emp.id === currentUser.id;
               return (
                 <div 
@@ -247,10 +363,23 @@ export function Employees({ business, currentUser }: EmployeesProps) {
                     </div>
 
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                      <span className="px-2.5 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] rounded-full font-bold uppercase">
-                        {emp.role}
+                      <span className="px-2.5 py-0.5 bg-emerald-50 border border-emerald-100 text-[#064E3B] text-[10px] rounded-full font-bold">
+                        {pInfo.title}
                       </span>
                       <span className="text-[10px] text-slate-400 font-medium">Joined: {new Date(emp.createdAt).toLocaleDateString()}</span>
+                    </div>
+
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {effectivePerms.slice(0, 5).map(perm => (
+                        <span key={perm} className="text-[8px] font-bold px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded">
+                          {perm}
+                        </span>
+                      ))}
+                      {effectivePerms.length > 5 && (
+                        <span className="text-[8px] font-bold px-1.5 py-0.2 bg-slate-100 text-slate-500 rounded">
+                          +{effectivePerms.length - 5} more
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-1.5 text-[10px] text-slate-500 font-medium bg-slate-50 p-1.5 rounded-lg border border-slate-100">
@@ -316,161 +445,249 @@ export function Employees({ business, currentUser }: EmployeesProps) {
             </header>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
-              {/* Permissions list */}
-              <div className="space-y-3">
-                <h5 className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Workspace Access Level</h5>
-                <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-slate-200/60 space-y-2">
-                  <p className="font-bold text-indigo-700 uppercase">{selectedStaff.role} permissions matrix</p>
-                  <ul className="space-y-1.5 mt-2">
-                    {(ROLE_PERMISSIONS[selectedStaff.role]?.caps || []).map((cap, i) => (
-                      <li key={i} className="flex items-center gap-1.5 text-slate-600 font-semibold">
-                        <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" /> {cap}
-                      </li>
-                    ))}
-                  </ul>
+              {/* Success Notification */}
+              {saveSuccessMessage && (
+                <div id="save-success-banner" className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-bold flex items-center justify-between gap-2 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <span>{saveSuccessMessage}</span>
+                  </div>
+                  <button type="button" onClick={() => setSaveSuccessMessage(null)} className="text-emerald-700 hover:text-emerald-900 text-xs cursor-pointer font-bold px-1.5 py-0.5 rounded hover:bg-emerald-100">
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Current Status Overview */}
+              <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-slate-200/80 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Current Role</span>
+                  <span className="px-2.5 py-0.5 bg-emerald-50 border border-emerald-200 text-[#064E3B] text-[10px] rounded-full font-extrabold uppercase">
+                    {ROLE_PERMISSIONS[selectedStaff.role]?.title || selectedStaff.role}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-500 font-medium">Account Status</span>
+                  <span className={`font-bold capitalize ${selectedStaff.status === 'active' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    ● {selectedStaff.status}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-500 font-medium">Assigned Branches</span>
+                  <span className="font-semibold text-slate-700">
+                    {(() => {
+                      const assignedIds = selectedStaff.branchIds && selectedStaff.branchIds.length > 0 
+                        ? selectedStaff.branchIds 
+                        : (selectedStaff.branchId ? [selectedStaff.branchId] : []);
+                      if (assignedIds.length === 0) return 'All Branches (Full Access)';
+                      return assignedIds.map(id => branches.find(b => b.id === id)?.name || id).join(', ');
+                    })()}
+                  </span>
                 </div>
               </div>
 
-              {/* Role Management for Owner / Admin */}
-              {canModifyStaff && selectedStaff.id !== currentUser.id && (
-                <div className="space-y-3 pt-2">
-                  <h5 className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Role & Branch Management</h5>
-                  <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-slate-200/60 space-y-3">
+              {/* Permission & Role Editor for Admin / Owner */}
+              {canModifyStaff && selectedStaff.id !== currentUser.id ? (
+                <div className="space-y-4 pt-1">
+                  <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Current Role</p>
-                      <span className="px-2.5 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] rounded-full font-bold uppercase inline-block">
-                        {selectedStaff.role}
-                      </span>
+                      <h5 className="font-bold text-slate-800 text-xs">Role & Module Permissions</h5>
+                      <p className="text-[10px] text-slate-400">Configure what modules and operational tools this employee can access</p>
+                    </div>
+                  </div>
+
+                  {/* Predefined Role Selector */}
+                  <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-3">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 uppercase font-extrabold mb-1 tracking-wider">
+                        Predefined Role
+                      </label>
+                      <select
+                        id="employee-role-selector"
+                        value={editRoleValue}
+                        onChange={(e) => handleRoleSelectChange(e.target.value)}
+                        className="block w-full px-3 py-2.5 border border-slate-200 bg-white rounded-xl text-slate-800 text-xs font-bold cursor-pointer focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                      >
+                        <option value="pos_inventory_staff">POS & Inventory Staff (Access: POS, Products, Inventory, Sales)</option>
+                        <option value="cashier">Cashier Clerk (Access: POS, Sales, Returns)</option>
+                        <option value="salesperson">Sales Associate (Access: POS, Sales, Customers)</option>
+                        <option value="inventory_staff">Inventory Specialist (Access: Products, Inventory, Returns)</option>
+                        <option value="manager">Operational Manager (Full Reports & Catalog)</option>
+                        <option value="owner">Owner / Administrator (Full System Access)</option>
+                      </select>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Changing predefined role sets default permissions. You can customize individual checkboxes below.
+                      </p>
                     </div>
 
-                    {!isEditingRole && (
-                      <div className="mt-1">
-                        <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Assigned Branches</p>
-                        {(() => {
-                          const assignedIds = selectedStaff.branchIds && selectedStaff.branchIds.length > 0 
-                            ? selectedStaff.branchIds 
-                            : (selectedStaff.branchId ? [selectedStaff.branchId] : []);
-                          if (assignedIds.length === 0) {
-                            return <span className="text-rose-500 font-bold text-[10px] uppercase">Unassigned (Full Access)</span>;
-                          }
-                          const assignedNames = assignedIds.map(id => branches.find(b => b.id === id)?.name || id);
-                          return <span className="font-bold text-slate-700 text-[11px]">{assignedNames.join(', ')}</span>;
-                        })()}
+                    {/* Module Permissions Checklist */}
+                    <div className="pt-3 border-t border-slate-100 space-y-2.5">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-500 uppercase font-extrabold tracking-wider">
+                            Authorized Modules
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-[#064E3B]">
+                            {editPermissions.length} granted
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={handleSelectAllPermissions}
+                            className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 px-2 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 transition cursor-pointer"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleClearAllPermissions}
+                            className="text-[10px] font-bold text-slate-500 hover:text-rose-600 px-2 py-0.5 rounded bg-slate-100 hover:bg-rose-50 transition cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleResetToRoleDefaults}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 transition cursor-pointer"
+                          >
+                            Defaults
+                          </button>
+                        </div>
                       </div>
-                    )}
 
-                    {isEditingRole ? (
-                      <div className="space-y-2">
-                        <label className="block text-[10px] text-slate-400 uppercase font-bold">Select New Role</label>
-                        <select
-                          value={editRoleValue}
-                          onChange={(e) => {
-                            setEditRoleValue(e.target.value as UserRole);
-                            setEditBranchIds([]); // reset on role change
-                          }}
-                          className="block w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 text-xs font-semibold cursor-pointer focus:ring-1 focus:ring-emerald-500"
-                        >
-                          <option value="manager">Operational Manager</option>
-                          <option value="cashier">Cashier Clerk</option>
-                          <option value="salesperson">Sales Associate</option>
-                          <option value="inventory_staff">Inventory Specialist</option>
-                        </select>
-
-                        <div className="mt-2.5">
-                          <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">Edit Branch Assignment</label>
-                          {branches.length === 0 ? (
-                            <p className="text-slate-400 text-[10px]">No branches defined.</p>
-                          ) : ['owner', 'manager'].includes(editRoleValue) ? (
-                            <div className="space-y-1 max-h-[100px] overflow-y-auto p-2 border border-slate-200 rounded-xl bg-white">
-                              {branches.map(b => (
-                                <label key={b.id} className="flex items-center gap-1.5 cursor-pointer select-none text-[10px]">
-                                  <input
-                                    type="checkbox"
-                                    checked={editBranchIds.includes(b.id)}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        setEditBranchIds([...editBranchIds, b.id]);
-                                      } else {
-                                        setEditBranchIds(editBranchIds.filter(id => id !== b.id));
-                                      }
-                                    }}
-                                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-3 w-3"
-                                  />
-                                  <span className="text-slate-700 font-semibold">{b.name}</span>
-                                </label>
-                              ))}
-                            </div>
-                          ) : (
-                            <select
-                              value={editBranchIds[0] || ''}
-                              onChange={(e) => setEditBranchIds(e.target.value ? [e.target.value] : [])}
-                              className="block w-full px-2.5 py-1.5 border border-slate-200 bg-white rounded-xl text-slate-800 text-[10px] font-semibold cursor-pointer focus:ring-1 focus:ring-emerald-500"
+                      {/* Permissions List */}
+                      <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                        {AVAILABLE_PERMISSIONS.map(perm => {
+                          const isChecked = editPermissions.includes(perm.id);
+                          return (
+                            <div
+                              key={perm.id}
+                              id={`perm-option-${perm.id.toLowerCase().replace(/\s+/g, '-')}`}
+                              onClick={() => handleTogglePermission(perm.id)}
+                              className={`p-2.5 rounded-xl border transition-all cursor-pointer select-none flex items-start gap-2.5 ${
+                                isChecked
+                                  ? 'border-emerald-300 bg-emerald-50/60 shadow-xs'
+                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                              }`}
                             >
-                              <option value="">Select branch assignment...</option>
-                              {branches.map(b => (
-                                <option key={b.id} value={b.id}>{b.name}</option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const originalBranches = selectedStaff.branchIds || (selectedStaff.branchId ? [selectedStaff.branchId] : []);
-                              const branchesChanged = JSON.stringify(editBranchIds.sort()) !== JSON.stringify(originalBranches.sort());
-                              if (editRoleValue === selectedStaff.role && !branchesChanged) {
-                                alert("No changes were made to role or branch assignments.");
-                                return;
-                              }
-                              if (confirm("Are you sure you want to save employee profile updates?")) {
-                                const updatedUser: User = { 
-                                  ...selectedStaff, 
-                                  role: editRoleValue,
-                                  branchId: editBranchIds[0] || '',
-                                  branchIds: editBranchIds
-                                };
-                                db.saveUser(updatedUser);
-
-                                db.addActivityLog(business.id, {
-                                  userId: currentUser.id,
-                                  userName: currentUser.name,
-                                  action: 'Staff Record Altered',
-                                  details: `Updated role and branch assignments of employee "${selectedStaff.name}".`
-                                });
-
-                                setSelectedStaff(updatedUser);
-                                setIsEditingRole(false);
-                                forceUpdate();
-                              }
-                            }}
-                            className="flex-1 py-1.5 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-[10px] font-bold cursor-pointer transition-colors text-center"
-                          >
-                            Save Changes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsEditingRole(false)}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-[10px] font-bold cursor-pointer transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
+                              <input
+                                type="checkbox"
+                                id={`checkbox-${perm.id}`}
+                                checked={isChecked}
+                                onChange={() => {}} // handled by parent div
+                                className="mt-0.5 rounded border-slate-300 text-[#064E3B] focus:ring-emerald-500 h-3.5 w-3.5 shrink-0 pointer-events-none"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <span className={`font-bold text-xs ${isChecked ? 'text-[#064E3B]' : 'text-slate-700'}`}>
+                                    {perm.name}
+                                  </span>
+                                  <span className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">
+                                    {perm.category}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                                  {perm.description}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditRoleValue(selectedStaff.role);
-                          setEditBranchIds(selectedStaff.branchIds || (selectedStaff.branchId ? [selectedStaff.branchId] : []));
-                          setIsEditingRole(true);
-                        }}
-                        className="w-full py-2 bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 rounded-xl text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                      >
-                        <Shield className="h-3 w-3" /> Edit Employee Role / Branches
-                      </button>
+                    </div>
+
+                    {/* Branch Assignment */}
+                    {branches.length > 0 && (
+                      <div className="pt-3 border-t border-slate-100 space-y-1.5">
+                        <label className="block text-[10px] text-slate-500 uppercase font-extrabold tracking-wider">
+                          Branch Assignment
+                        </label>
+                        {['owner', 'manager'].includes(editRoleValue) ? (
+                          <div className="space-y-1 max-h-[100px] overflow-y-auto p-2 border border-slate-200 rounded-xl bg-slate-50">
+                            {branches.map(b => (
+                              <label key={b.id} className="flex items-center gap-1.5 cursor-pointer select-none text-[10px]">
+                                <input
+                                  type="checkbox"
+                                  checked={editBranchIds.includes(b.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setEditBranchIds([...editBranchIds, b.id]);
+                                    } else {
+                                      setEditBranchIds(editBranchIds.filter(id => id !== b.id));
+                                    }
+                                  }}
+                                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-3 w-3"
+                                />
+                                <span className="text-slate-700 font-semibold">{b.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <select
+                            value={editBranchIds[0] || ''}
+                            onChange={(e) => setEditBranchIds(e.target.value ? [e.target.value] : [])}
+                            className="block w-full px-2.5 py-1.5 border border-slate-200 bg-white rounded-xl text-slate-800 text-xs font-semibold cursor-pointer focus:ring-1 focus:ring-emerald-500"
+                          >
+                            <option value="">All Branches / Unrestricted</option>
+                            {branches.map(b => (
+                              <option key={b.id} value={b.id}>{b.name} ({b.location})</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                     )}
+
+                    {/* Action Buttons */}
+                    <div className="pt-3 border-t border-slate-100 flex items-center gap-2">
+                      <button
+                        id="save-employee-permissions-btn"
+                        type="button"
+                        onClick={handleSavePermissions}
+                        className="flex-1 py-2.5 px-4 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                      >
+                        <Check className="h-4 w-4 text-emerald-300" />
+                        <span>Save Role & Permissions</span>
+                      </button>
+                      <button
+                        id="cancel-employee-permissions-btn"
+                        type="button"
+                        onClick={handleCancelChanges}
+                        className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : selectedStaff.id === currentUser.id ? (
+                <div className="p-4 rounded-2xl bg-emerald-50/40 border border-emerald-200 space-y-2">
+                  <p className="font-bold text-[#064E3B] text-xs flex items-center gap-1.5">
+                    <Shield className="h-4 w-4" /> Logged-in Administrator Account
+                  </p>
+                  <p className="text-[11px] text-slate-600 leading-normal">
+                    This account holds master administrative credentials with full privileges across all workspaces and business modules.
+                  </p>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {AVAILABLE_PERMISSIONS.map(p => (
+                      <span key={p.id} className="text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-[#064E3B]">
+                        {p.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <h5 className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Assigned Permissions</h5>
+                  <div className="flex flex-wrap gap-1.5">
+                    {((selectedStaff.permissions && selectedStaff.permissions.length > 0) 
+                      ? selectedStaff.permissions 
+                      : (ROLE_PERMISSIONS[selectedStaff.role]?.defaultPermissions || [])
+                    ).map(perm => (
+                      <span key={perm} className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700">
+                        {perm}
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
@@ -542,10 +759,11 @@ export function Employees({ business, currentUser }: EmployeesProps) {
                   }}
                   className="block w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 focus:ring-1 focus:ring-emerald-500 text-xs cursor-pointer"
                 >
+                  <option value="pos_inventory_staff">POS & Inventory Staff (Access: POS, Products, Inventory, Sales)</option>
+                  <option value="cashier">Cashier Clerk (Access: POS, Sales, Returns)</option>
+                  <option value="salesperson">Sales Associate (Access: POS, Sales, Customers)</option>
+                  <option value="inventory_staff">Inventory Specialist (Access: Products, Inventory, Returns)</option>
                   <option value="manager">Operational Manager (Full Reports & Catalog)</option>
-                  <option value="cashier">Cashier Clerk (POS Checkout Only)</option>
-                  <option value="salesperson">Sales Associate (POS & Customer Tabs)</option>
-                  <option value="inventory_staff">Inventory Staff (Catalog & Stock Adjustment)</option>
                 </select>
               </div>
 

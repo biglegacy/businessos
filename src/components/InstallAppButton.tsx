@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Smartphone, Check, Download, Loader2, Info, X, Share, PlusSquare } from 'lucide-react';
+import { Smartphone, Check, Download, Loader2, Info, X, Share, PlusSquare, Copy } from 'lucide-react';
 
 interface InstallAppButtonProps {
   className?: string;
@@ -15,22 +15,24 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstalling, setIsInstalling] = useState(false);
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
-  // Check if currently running in standalone PWA mode
+  // Accurate standalone check (never falsely permanently locked by localStorage)
   const [isInstalled, setIsInstalled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return (
       window.matchMedia('(display-mode: standalone)').matches ||
       window.matchMedia('(display-mode: minimal-ui)').matches ||
-      (navigator as any).standalone === true ||
-      document.referrer.includes('android-app://') ||
-      localStorage.getItem('bos_pwa_installed') === 'true'
+      (navigator as any).standalone === true
     );
   });
 
-  // Check browser capabilities
+  // Check browser & iOS capabilities
   const isPwaSupported = typeof window !== 'undefined' && ('serviceWorker' in navigator);
-  const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || ((navigator as any).maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
+  const isIOS = typeof navigator !== 'undefined' && (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    ((navigator as any).maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent))
+  );
 
   useEffect(() => {
     // 1. Recover prompt if already captured on window
@@ -51,9 +53,6 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
       setIsInstalling(false);
       setDeferredPrompt(null);
       (window as any).deferredPrompt = null;
-      try {
-        localStorage.setItem('bos_pwa_installed', 'true');
-      } catch (e) {}
     };
 
     const handlePwaInstallable = () => {
@@ -71,9 +70,6 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
     const handleMediaChange = (evt: MediaQueryListEvent) => {
       if (evt.matches) {
         setIsInstalled(true);
-        try {
-          localStorage.setItem('bos_pwa_installed', 'true');
-        } catch (e) {}
       }
     };
 
@@ -91,20 +87,30 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
     };
   }, []);
 
+  const triggerNativeShare = async () => {
+    if (typeof navigator !== 'undefined' && (navigator as any).share) {
+      try {
+        await (navigator as any).share({
+          title: 'BusinessOS',
+          text: 'Install BusinessOS to your Home Screen',
+          url: window.location.href
+        });
+      } catch (err) {
+        // Ignored if user cancelled sheet
+      }
+    }
+  };
+
   const handleInstallClick = async () => {
     const promptEvent = deferredPrompt || (window as any).deferredPrompt;
 
     if (promptEvent && typeof promptEvent.prompt === 'function') {
       setIsInstalling(true);
       try {
-        // Show native install prompt
         await promptEvent.prompt();
         const choiceResult = await promptEvent.userChoice;
         if (choiceResult && choiceResult.outcome === 'accepted') {
           setIsInstalled(true);
-          try {
-            localStorage.setItem('bos_pwa_installed', 'true');
-          } catch (e) {}
         }
       } catch (err) {
         console.warn('Native PWA install prompt error:', err);
@@ -113,25 +119,46 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
         setDeferredPrompt(null);
         (window as any).deferredPrompt = null;
       }
+    } else if (isIOS) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('open-ios-install-overlay'));
+      }
+      triggerNativeShare();
     } else {
-      // Prompt not directly available (e.g. iOS Safari, manual browser install)
       setShowInstructionsModal(true);
     }
   };
 
-  // State: App is already installed and running
+  const handleCopyLink = () => {
+    try {
+      navigator.clipboard.writeText(window.location.href);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch (e) {}
+  };
+
+  // State: App is currently running in standalone PWA mode
   if (isInstalled) {
     if (variant === 'sidebar') {
       return (
-        <div id="pwa-status-installed" className={`p-3 bg-emerald-950/60 border border-emerald-500/30 rounded-xl flex items-center gap-2.5 text-emerald-300 text-xs font-bold ${className}`}>
-          <div className="h-6 w-6 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
-            <Check className="h-3.5 w-3.5" />
+        <div id="pwa-status-installed" className={`p-2.5 bg-emerald-950/60 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-emerald-300 text-xs font-bold ${className}`}>
+          <div className="h-5 w-5 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+            <Check className="h-3 w-3" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[11px] text-emerald-400 font-extrabold uppercase tracking-wider">PWA Mode</span>
-            <span className="text-xs text-white">App Installed</span>
+            <span className="text-[10px] text-emerald-400 font-extrabold uppercase tracking-wider">PWA Mode</span>
+            <span className="text-[11px] text-white">Standalone Active</span>
           </div>
         </div>
+      );
+    }
+
+    if (variant === 'badge') {
+      return (
+        <span className={`inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold ${className}`}>
+          <Check className="h-3 w-3 text-emerald-600" />
+          <span>Installed</span>
+        </span>
       );
     }
 
@@ -160,7 +187,7 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
     return (
       <button
         disabled
-        className={`inline-flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-xl text-xs font-bold opacity-90 cursor-wait ${className}`}
+        className={`inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-700 text-white rounded-xl text-xs font-bold opacity-90 cursor-wait ${className}`}
       >
         <Loader2 className="h-4 w-4 animate-spin" />
         <span>Installing…</span>
@@ -183,7 +210,7 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
               ? 'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/40'
               : 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-200 border border-emerald-500/20'
           } ${className}`}
-          title={isPromptAvailable ? 'Install BusinessOS App' : 'Add BusinessOS to Home Screen'}
+          title={isIOS ? 'Install BusinessOS for iOS' : (isPromptAvailable ? 'Install BusinessOS App' : 'Add BusinessOS to Home Screen')}
         >
           {isPromptAvailable ? (
             <>
@@ -193,21 +220,31 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
           ) : (
             <>
               <Smartphone className="h-4 w-4 text-emerald-300" />
-              <span>Install App</span>
+              <span>{isIOS ? 'Install for iOS' : 'Install App'}</span>
             </>
           )}
+        </button>
+      ) : variant === 'badge' ? (
+        <button
+          type="button"
+          onClick={handleInstallClick}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#064E3B] border border-emerald-300 rounded-xl text-xs font-bold transition shadow-2xs cursor-pointer ${className}`}
+          title={isIOS ? 'Install BusinessOS for iOS' : 'Install App'}
+        >
+          <Smartphone className="h-3.5 w-3.5 text-emerald-700" />
+          <span>{isIOS ? 'Install on iOS' : 'Install App'}</span>
         </button>
       ) : (
         <button
           type="button"
           id="btn-pwa-install"
           onClick={handleInstallClick}
-          className={`inline-flex items-center gap-2 px-4 py-2 font-bold rounded-xl text-xs shadow-sm transition cursor-pointer ${
+          className={`inline-flex items-center gap-2 px-3.5 py-2 font-bold rounded-xl text-xs shadow-xs transition cursor-pointer ${
             isPromptAvailable
-              ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white border border-emerald-500'
+              ? 'bg-[#064E3B] hover:bg-[#053d2e] text-white border border-emerald-600'
               : 'bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300'
           } ${className}`}
-          title={isPromptAvailable ? 'Install BusinessOS as a standalone PWA' : 'How to install BusinessOS'}
+          title={isIOS ? 'Install BusinessOS for iPhone/iPad' : (isPromptAvailable ? 'Install BusinessOS as a standalone PWA' : 'How to install BusinessOS')}
         >
           {isPromptAvailable ? (
             <>
@@ -217,24 +254,24 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
           ) : (
             <>
               <Smartphone className="h-3.5 w-3.5 text-emerald-700" />
-              <span>Install App</span>
+              <span>{isIOS ? 'Install for iOS' : 'Install App'}</span>
             </>
           )}
         </button>
       )}
 
-      {/* Manual Installation Instructions Modal (for iOS Safari, Firefox, or unprompted desktop) */}
+      {/* Manual Installation Instructions Modal (Optimized for iOS Safari, Chrome on iOS, and Desktop) */}
       {showInstructionsModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl relative text-left">
+          <div className="bg-white rounded-3xl max-w-sm sm:max-w-md w-full p-5 sm:p-6 border border-slate-200 shadow-2xl relative text-left">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
                   <Smartphone className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">Install BusinessOS App</h3>
-                  <p className="text-xs text-emerald-700 font-semibold">Native PWA Experience</p>
+                  <h3 className="font-extrabold text-slate-900 text-base">Install BusinessOS</h3>
+                  <p className="text-xs text-emerald-700 font-semibold">{isIOS ? 'Apple iPhone & iPad PWA' : 'Standalone PWA App'}</p>
                 </div>
               </div>
               <button
@@ -246,46 +283,88 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
               </button>
             </div>
 
-            <div className="space-y-4 text-xs text-slate-700">
-              <p className="font-medium text-slate-600">
-                BusinessOS can be installed as a standalone application on your device for lightning-fast access, offline storage, and full-screen experience.
+            <div className="space-y-3.5 text-xs text-slate-700">
+              <p className="font-medium text-slate-600 leading-relaxed text-[11px]">
+                BusinessOS is built as a complete Progressive Web App with offline local database sync, camera barcode scanner, and full-screen terminal POS mode.
               </p>
 
               {isIOS ? (
-                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-2">
-                  <p className="font-bold text-emerald-950 flex items-center gap-1.5 text-[13px]">
-                    <Share className="h-4 w-4 text-emerald-700" /> On Apple iPhone / iPad:
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-2.5">
+                  {typeof navigator !== 'undefined' && (navigator as any).share && (
+                    <button
+                      type="button"
+                      onClick={triggerNativeShare}
+                      className="w-full py-2.5 px-3 bg-[#064E3B] hover:bg-[#053d2e] text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs shadow-md transition cursor-pointer active:scale-98 mb-2"
+                    >
+                      <Share className="h-4 w-4 text-emerald-200" />
+                      <span>Open iOS Share Sheet Now</span>
+                    </button>
+                  )}
+                  <p className="font-bold text-emerald-950 flex items-center gap-1.5 text-xs">
+                    <Share className="h-4 w-4 text-emerald-700" /> 3 Steps on iPhone &amp; iPad:
                   </p>
-                  <ol className="list-decimal list-inside space-y-1.5 text-emerald-900 font-medium">
-                    <li>Tap the <strong>Share button</strong> in Safari's bottom toolbar (<span className="inline-block px-1.5 py-0.5 bg-emerald-200/60 rounded text-[11px] font-bold">📤</span>).</li>
-                    <li>Scroll down and tap <strong>Add to Home Screen</strong> (<span className="inline-block px-1.5 py-0.5 bg-emerald-200/60 rounded text-[11px] font-bold"><PlusSquare className="inline h-3 w-3" /> Add</span>).</li>
-                    <li>Tap <strong>Add</strong> in the top-right corner to install.</li>
+                  <ol className="space-y-2 text-emerald-900 font-medium text-[11px]">
+                    <li className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+                      <span>Tap the <strong>Share</strong> button in Safari&rsquo;s toolbar (<Share className="inline h-3.5 w-3.5 text-emerald-800" /> at bottom of screen).</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+                      <span>Scroll down the menu and tap <strong>Add to Home Screen</strong> (<PlusSquare className="inline h-3.5 w-3.5 text-emerald-800" />).</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+                      <span>Tap <strong>Add</strong> in the top-right corner to complete installation.</span>
+                    </li>
                   </ol>
+
+                  <div className="pt-2 border-t border-emerald-200/60 mt-2">
+                    <p className="text-[10px] text-emerald-800 font-semibold mb-1.5">
+                      Need to open in Safari from another browser or social app?
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="w-full py-1.5 px-2 bg-white border border-emerald-300 rounded-xl font-bold text-emerald-800 hover:bg-emerald-100 flex items-center justify-center gap-1.5 transition text-[11px] cursor-pointer"
+                    >
+                      {copiedLink ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                          <span>Link Copied! Paste into Safari</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 text-emerald-600" />
+                          <span>Copy App URL to Open in Safari</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-2">
-                  <p className="font-bold text-emerald-950 flex items-center gap-1.5 text-[13px]">
+                  <p className="font-bold text-emerald-950 flex items-center gap-1.5 text-xs">
                     <Download className="h-4 w-4 text-emerald-700" /> On Android &amp; Chrome / Edge:
                   </p>
-                  <ol className="list-decimal list-inside space-y-1.5 text-emerald-900 font-medium">
+                  <ol className="list-decimal list-inside space-y-1 text-emerald-900 font-medium text-[11px]">
                     <li>Look for the <strong>Install App icon (⊕)</strong> on the right side of the address bar.</li>
                     <li>Or click the browser menu (<strong>⋮</strong>), then choose <strong>&ldquo;Install BusinessOS&rdquo;</strong> or <strong>&ldquo;Add to Home screen&rdquo;</strong>.</li>
-                    <li>Confirm installation when prompted. The app will launch in standalone window mode.</li>
+                    <li>Confirm installation when prompted.</li>
                   </ol>
                 </div>
               )}
 
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex items-start gap-2 text-slate-600 text-[11px]">
-                <Info className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Once installed, BusinessOS will run independently without browser address bars and support offline sync.</span>
+              <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-2xl flex items-start gap-2 text-slate-600 text-[11px]">
+                <Info className="h-3.5 w-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                <span>Once launched from your Home Screen, BusinessOS opens full-screen without address bar clutter and runs offline.</span>
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-5 flex justify-end">
               <button
                 type="button"
                 onClick={() => setShowInstructionsModal(false)}
-                className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs transition cursor-pointer"
+                className="px-5 py-2.5 bg-[#064E3B] hover:bg-[#053d2e] text-white font-bold rounded-xl text-xs transition cursor-pointer"
               >
                 Got It
               </button>
@@ -296,3 +375,4 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
     </>
   );
 }
+

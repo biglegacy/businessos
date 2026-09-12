@@ -165,6 +165,7 @@ export type UserRole =
   | 'cashier' 
   | 'salesperson' 
   | 'inventory_staff' 
+  | 'pos_inventory_staff'
   | 'admin' 
   | 'SUPER_ADMIN'
   | 'principal'
@@ -172,7 +173,8 @@ export type UserRole =
   | 'accountant'
   | 'teacher'
   | 'parent'
-  | 'student';
+  | 'student'
+  | string;
 
 export interface User {
   id: string;
@@ -180,10 +182,12 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
+  permissions?: string[]; // Custom assigned module permissions, e.g. ['POS', 'Products', 'Inventory', 'Sales']
   status: 'active' | 'disabled';
   password?: string; // for security representation
   authProvider?: string; // 'password'
   createdAt: string;
+  updatedAt?: string;
   branchId?: string; // Optional branch assignment
   branchIds?: string[]; // Multiple branch assignments for roles like manager
 }

@@ -911,12 +911,19 @@ class CloudDatabase {
   public saveUser(user: User): void {
     const list = this.getUsers();
     const idx = list.findIndex(u => u.id === user.id);
+    const userToSave: User = {
+      ...user,
+      updatedAt: user.updatedAt || new Date().toISOString()
+    };
     if (idx >= 0) {
-      list[idx] = user;
+      list[idx] = userToSave;
     } else {
-      list.push(user);
+      list.push(userToSave);
     }
     this.write('bos_users', list);
+    try {
+      window.dispatchEvent(new CustomEvent('bos_users_updated', { detail: userToSave }));
+    } catch (e) {}
   }
 
   public deleteUser(id: string): void {

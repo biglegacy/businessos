@@ -12,12 +12,61 @@
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
     <link rel="shortcut icon" href="/favicon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#064E3B" />
+    
+    <!-- iOS Apple PWA Meta Tags & Web Capabilities -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-touch-fullscreen" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="BusinessOS" />
+    <meta name="format-detection" content="telephone=no" />
+    
+    <!-- Apple Touch Icons for iPhone, iPad, and Retina Displays -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="167x167" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="120x120" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/favicon.png" color="#064E3B" />
+
+    <style>
+      /* iOS Launch Splash Screen prior to React hydration */
+      #root:empty {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #064E3B;
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        padding: env(safe-area-inset-top, 20px) 20px env(safe-area-inset-bottom, 20px) 20px;
+        z-index: 99999;
+      }
+      #root:empty::before {
+        content: '';
+        width: 72px;
+        height: 72px;
+        background-image: url('/apple-touch-icon.png');
+        background-size: cover;
+        background-position: center;
+        border-radius: 18px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+        margin-bottom: 20px;
+      }
+      #root:empty::after {
+        content: 'BusinessOS';
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+        opacity: 0.95;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
@@ -31,9 +80,22 @@
       });
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('ServiceWorker registered with scope: ', reg.scope))
-            .catch(err => console.log('ServiceWorker registration failed: ', err));
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(reg => {
+              console.log('BusinessOS ServiceWorker registered with scope: ', reg.scope);
+              // Check for SW updates periodically
+              reg.onupdatefound = () => {
+                const installingWorker = reg.installing;
+                if (installingWorker) {
+                  installingWorker.onstatechange = () => {
+                    if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                      console.log('New BusinessOS content available, will activate on next reload');
+                    }
+                  };
+                }
+              };
+            })
+            .catch(err => console.log('ServiceWorker registration note: ', err));
         });
       }
     </script>

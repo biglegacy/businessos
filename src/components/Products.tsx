@@ -469,7 +469,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
   });
 
   // Check role authorization to edit catalog
-  const canEditCatalog = ['owner', 'manager', 'inventory_staff', 'admin', 'SUPER_ADMIN'].includes(user.role);
+  const canEditCatalog = ['owner', 'manager', 'inventory_staff', 'pos_inventory_staff', 'admin', 'SUPER_ADMIN'].includes(user.role) || (user.permissions && (user.permissions.includes('Products') || user.permissions.includes('Inventory')));
 
   return (
     <div className="space-y-6 font-sans">
