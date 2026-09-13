@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db';
+import { firestore, doc, getDoc, deleteDoc } from '../lib/firebase';
 import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES, BusinessPopupPrompt, SmsTimingDetails } from '../types';
 import { 
   Building, Users, Shield, CheckCircle2, AlertTriangle, Trash2, 
@@ -12,7 +13,7 @@ import {
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
   MessageSquare, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
-  Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle
+  Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -39,9 +40,17 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [trigger, setTrigger] = useState(0);
   const forceUpdate = () => setTrigger(prev => prev + 1);
 
-  // Real-time listener for cloud database updates
+  // Real-time listener and reactive Firestore businesses state
+  const [firestoreBusinesses, setFirestoreBusinesses] = useState<Business[]>(() => db.getBusinesses());
+
   useEffect(() => {
+    // Initial fetch directly from Firestore to ensure real database state
+    db.fetchBusinessesFromFirestore().then(items => {
+      setFirestoreBusinesses(items);
+    }).catch(() => {});
+
     const unsubscribe = db.subscribe(() => {
+      setFirestoreBusinesses(db.getBusinesses());
       forceUpdate();
     });
     return () => unsubscribe();
@@ -460,8 +469,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [newPassVal, setNewPassVal] = useState('');
   const [newOwnerPassVal, setNewOwnerPassVal] = useState('');
 
-  // Fetch current data
-  const businesses = db.getBusinesses();
+  // Fetch current data from reactive Firestore state
+  const businesses = firestoreBusinesses;
   const users = db.getUsers().filter(u => u.role !== 'admin'); // Hide admin from employee list
   const logs = db.getAllLogs().sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -469,6 +478,59 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const totalBusinesses = businesses.length;
   const totalUsers = users.length + 1; // plus super admin
   const activeBusinesses = businesses.filter(b => b.status === 'active').length;
+
+  // Retrieve pricing plans for plan resolution
+  const pricingPlans = db.getPricingPlans() || [];
+
+  // Helper to compile comprehensive business dossier details
+  const getBusinessDetails = (bus: Business) => {
+    const isSchool = bus.category?.toLowerCase().includes('school') || bus.businessType?.toLowerCase().includes('school');
+    const matchedPlan = pricingPlans.find(p => p.id === bus.pricingPlanId);
+    const planName = matchedPlan?.name || bus.subscriptionPlan || (isSchool ? 'School Standard' : 'BusinessOS Standard');
+    const priceDisplay = (bus.subscriptionAmount !== undefined && bus.subscriptionAmount !== null)
+      ? `${bus.currency || 'GHS'} ${bus.subscriptionAmount}/mo`
+      : (matchedPlan ? `${matchedPlan.currency || bus.currency || 'GHS'} ${matchedPlan.price}/mo` : 'Free / Included');
+    const subStatus = bus.subscriptionStatus || (bus.status === 'active' ? 'active' : 'trial');
+    
+    // Branches
+    const branches = db.getBranches(bus.id);
+    const branchCount = Array.isArray(branches) && branches.length > 0 ? branches.length : 1;
+
+    // Users / Employees
+    const busUsers = users.filter(u => u && (u.businessId === bus.id || u.schoolId === bus.id));
+    const staffCount = busUsers.length;
+
+    // Registration Date
+    const regDateVal = bus.registrationDate || bus.createdAt;
+    const formattedRegDate = regDateVal
+      ? new Date(regDateVal).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : 'N/A';
+
+    // Last Activity / Login
+    const lastActVal = bus.updatedAt || bus.lastPaymentDate || bus.createdAt;
+    const formattedLastAct = lastActVal
+      ? new Date(lastActVal).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : 'Recent';
+
+    // Next Payment / Expiry
+    const nextPayVal = bus.nextPaymentDate || bus.trialEndDate || bus.subscriptionCycleEndDate;
+    const formattedNextPay = nextPayVal
+      ? new Date(nextPayVal).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : null;
+
+    return {
+      isSchool,
+      planName,
+      priceDisplay,
+      subStatus,
+      branchCount,
+      staffCount,
+      formattedRegDate,
+      formattedLastAct,
+      formattedNextPay,
+      busUsers
+    };
+  };
 
   // --- PAYSTACK HANDLERS ---
   const handleSavePayNowSettings = async (e: React.FormEvent) => {
@@ -733,39 +795,35 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setDeleteErrorMessage(null);
 
     try {
-      // 1. Purge via db.deleteBusinessPermanent
+      // 1. Purge via db.deleteBusinessPermanent (handles Firestore doc + subcollections + tombstone + backend call)
       const currentUser = db.getCurrentUser() || { id: 'superadmin', email: 'admin@businessos.com', name: 'Super Admin' };
       await db.deleteBusinessPermanent(busId, currentUser);
 
-      // 2. Also call backend endpoint to guarantee cloud_db.json and Firebase Admin accounts are purged
+      // 2. Query Firestore directly to verify business document no longer exists
       try {
-        await fetch(`/api/admin/business/${busId}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-super-admin': 'true'
-          }
-        });
-      } catch (backendErr) {
-        console.warn('Backend sync delete note:', backendErr);
-      }
+        const checkDoc = await getDoc(doc(firestore, 'bos_businesses', busId));
+        if (checkDoc.exists()) {
+          await deleteDoc(doc(firestore, 'bos_businesses', busId));
+        }
+      } catch (e) {}
 
-      // 3. Purge local cache and notify listeners
-      db.purgeLocalBusinessData(busId);
+      // 3. Immediately query Firestore to refresh businesses list
+      const freshBusinesses = await db.fetchBusinessesFromFirestore();
+      setFirestoreBusinesses(freshBusinesses);
 
-      // 4. Update UI state immediately
+      // 4. Update UI state
       if (viewingBusiness?.id === busId) {
         setViewingBusiness(null);
       }
       setDeletingBusinessTarget(null);
       setDeleteConfirmInput('');
-      setDeleteSuccessMessage(`Business / School "${busName}" has been permanently deleted from the database.`);
+      setDeleteSuccessMessage(`Business / School "${busName}" and all associated database records have been permanently deleted.`);
       setTimeout(() => setDeleteSuccessMessage(null), 6000);
       forceUpdate();
     } catch (err: any) {
       console.error('Delete business error:', err);
-      const msg = err?.message || String(err);
-      setDeleteErrorMessage(`Failed to delete business: ${msg}`);
+      const msg = err?.message || 'Business deletion failed. Please try again.';
+      setDeleteErrorMessage(msg);
     } finally {
       setIsDeletingInProgress(false);
     }
@@ -946,11 +1004,14 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
   // Filters
   const filteredBusinesses = businesses.filter(b => {
-    const matchesSearch = b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.id.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = searchTerm.toLowerCase();
+    const matchesSearch = b.name?.toLowerCase().includes(term) ||
+      b.ownerName?.toLowerCase().includes(term) ||
+      b.email?.toLowerCase().includes(term) ||
+      (b.phone && b.phone.toLowerCase().includes(term)) ||
+      b.category?.toLowerCase().includes(term) ||
+      (b.businessType && b.businessType.toLowerCase().includes(term)) ||
+      b.id?.toLowerCase().includes(term);
 
     const isSchool = (b.category === 'School / Educational Institution' || b.businessType === 'School / Educational Institution' || b.category?.toLowerCase().includes('school'));
     if (bizCategoryFilter === 'school') return matchesSearch && isSchool;
@@ -1319,233 +1380,384 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
               </div>
 
-              {/* Mobile Phone Cards (visible only on mobile) */}
-              <div className="block lg:hidden space-y-3">
+              {/* Mobile Phone Cards (Visible on screens < lg) */}
+              <div className="block lg:hidden space-y-4">
                 {filteredBusinesses.map(bus => {
-                  const isSchool = bus.category?.toLowerCase().includes('school');
+                  const details = getBusinessDetails(bus);
+
                   return (
-                    <div key={bus.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 ${
-                            isSchool ? 'bg-indigo-600 shadow-indigo-200 shadow-md' : 'bg-emerald-600 shadow-emerald-200 shadow-md'
+                    <div key={bus.id} className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                      {/* Card Header: Identity & Status */}
+                      <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                          <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 shadow-sm ${
+                            details.isSchool ? 'bg-indigo-600 shadow-indigo-100' : 'bg-emerald-600 shadow-emerald-100'
                           }`}>
-                            {isSchool ? <GraduationCap className="h-5 w-5" /> : bus.name.charAt(0)}
+                            {details.isSchool ? <GraduationCap className="h-5 w-5" /> : bus.name.charAt(0)}
                           </div>
                           <div>
-                            <h4 className="font-extrabold text-slate-900 text-sm leading-snug">{bus.name}</h4>
-                            <p className="text-[10px] text-slate-400 font-mono">ID: {bus.id}</p>
+                            <h4 className="font-extrabold text-slate-900 text-base leading-tight">{bus.name}</h4>
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                                ID: {bus.id}
+                              </span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                                details.isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {bus.category || bus.businessType || 'General'}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold shrink-0 ${
-                          bus.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                        }`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
-                          {bus.status === 'active' ? 'Active' : 'Suspended'}
-                        </span>
-                      </div>
 
-                      <div className="bg-slate-50 p-3 rounded-xl text-xs space-y-1.5 text-slate-700 border border-slate-100">
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-400 font-medium">Type:</span>
-                          <span className="font-bold text-slate-800 bg-white px-2 py-0.5 rounded-md border border-slate-200 text-[10px]">
-                            {bus.category || 'General'}
+                        {/* Account & Sub Status Badges */}
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                            bus.status === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                            {bus.status === 'active' ? 'Active' : 'Suspended'}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                            details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                            details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
+                            'bg-amber-100 text-amber-800'
+                          }`}>
+                            Sub: {details.subStatus}
                           </span>
                         </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-400 font-medium">{isSchool ? 'Principal / Head:' : 'Owner:'}</span>
-                          <span className="font-semibold text-slate-800">{bus.ownerName}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-400 font-medium">Email:</span>
-                          <span className="text-slate-600 font-mono truncate max-w-[180px]">{bus.email}</span>
-                        </div>
-                        {bus.phone && (
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400 font-medium">Phone:</span>
-                            <span className="text-slate-800 font-mono">{bus.phone}</span>
-                          </div>
-                        )}
                       </div>
 
-                      {/* Action buttons with touch target (min-h-[44px]) */}
-                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                      {/* Comprehensive Business Details Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs bg-slate-50/80 p-3.5 rounded-xl border border-slate-100">
+                        {/* Owner & Contact */}
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            {details.isSchool ? 'Principal / Head' : 'Business Owner'}
+                          </p>
+                          <p className="font-bold text-slate-800 text-sm">{bus.ownerName}</p>
+                          <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
+                            <Mail className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{bus.email}</span>
+                          </p>
+                          <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1">
+                            <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span>{bus.phone || 'No phone recorded'}</span>
+                          </p>
+                        </div>
+
+                        {/* Subscription & Pricing */}
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Subscription &amp; Plan</p>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-extrabold text-slate-800 text-xs">{details.planName}</span>
+                            <span className="font-black text-emerald-800 text-xs bg-emerald-100/70 px-1.5 py-0.2 rounded">
+                              {details.priceDisplay}
+                            </span>
+                          </div>
+                          <p className="text-slate-500 text-[11px]">
+                            Cycle/Expiry: <strong className="text-slate-700 font-mono">{details.formattedNextPay || 'Active'}</strong>
+                          </p>
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <button
+                              onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
+                              disabled={togglingSmsBusId === bus.id}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
+                                bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                              }`}
+                              title="Toggle SMS Gateway"
+                            >
+                              SMS: {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
+                            </button>
+                            <span className="text-[10px] text-slate-400 font-mono">Currency: {bus.currency || 'GHC'}</span>
+                          </div>
+                        </div>
+
+                        {/* Scale & Activity */}
+                        <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scale &amp; Capacity</p>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-700 font-semibold">
+                            <span className="flex items-center gap-1">
+                              <GitBranch className="h-3.5 w-3.5 text-slate-400" /> {details.branchCount} {details.branchCount === 1 ? 'Branch' : 'Branches'}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Users className="h-3.5 w-3.5 text-slate-400" /> {details.staffCount} {details.staffCount === 1 ? 'Staff' : 'Staff'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Dates & Timeline */}
+                        <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timeline &amp; Activity</p>
+                          <p className="text-[11px] text-slate-600 flex items-center gap-1">
+                            <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+                            Registered: <span className="font-semibold text-slate-700">{details.formattedRegDate}</span>
+                          </p>
+                          <p className="text-[11px] text-slate-600 flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-slate-400 shrink-0" />
+                            Last Activity: <span className="font-semibold text-slate-700">{details.formattedLastAct}</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons - ALWAYS VISIBLE with clear touch targets */}
+                      <div className="space-y-2 pt-1 border-t border-slate-100">
                         {onManageBusiness && (
                           <button
                             onClick={() => onManageBusiness(bus)}
-                            className="col-span-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[44px]"
+                            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition cursor-pointer min-h-[44px]"
                           >
-                            <Building className="h-4 w-4" /> Enter {isSchool ? 'School' : 'Business'} Workspace
+                            <Building className="h-4 w-4" /> Open {details.isSchool ? 'School' : 'Business'} Dashboard
                           </button>
                         )}
-                        <button
-                          onClick={() => handleEditBusinessClick(bus)}
-                          className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
-                        >
-                          <Edit className="h-3.5 w-3.5" /> Edit Details
-                        </button>
-                        <button
-                          onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
-                          className={`py-2.5 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px] ${
-                            bus.status === 'active' ? 'bg-amber-50 text-amber-800 hover:bg-amber-100' : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                          }`}
-                        >
-                          <AlertTriangle className="h-3.5 w-3.5" /> {bus.status === 'active' ? 'Suspend' : 'Activate'}
-                        </button>
-                        <button
-                          onClick={() => setViewingBusiness(bus)}
-                          className="py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
-                        >
-                          <Eye className="h-3.5 w-3.5" /> Quick View
-                        </button>
-                        <button
-                          onClick={() => handleDeleteBusiness(bus.id)}
-                          className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition cursor-pointer min-h-[44px]"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" /> Delete {isSchool ? 'School' : 'Business'}
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => setViewingBusiness(bus)}
+                            className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px]"
+                          >
+                            <Eye className="h-4 w-4 text-slate-600" /> View Details
+                          </button>
+                          <button
+                            onClick={() => handleEditBusinessClick(bus)}
+                            className="py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px]"
+                          >
+                            <Edit className="h-4 w-4" /> Edit Details
+                          </button>
+                          <button
+                            onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
+                            className={`py-2.5 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px] ${
+                              bus.status === 'active' ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                            }`}
+                          >
+                            <AlertTriangle className="h-4 w-4" /> {bus.status === 'active' ? 'Suspend' : 'Activate'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBusiness(bus.id)}
+                            className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-rose-200 transition cursor-pointer min-h-[44px]"
+                          >
+                            <Trash2 className="h-4 w-4" /> Delete Business
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
                 })}
+
                 {filteredBusinesses.length === 0 && (
-                  <div className="py-8 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
-                    No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your query.
+                  <div className="py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+                    No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your filter criteria.
                   </div>
                 )}
               </div>
 
-              {/* Desktop Table View */}
-              <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <table className="w-full text-left border-collapse">
+              {/* Desktop Responsive Table with ALWAYS-VISIBLE Action Columns */}
+              <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[1240px]">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
-                      <th className="py-3.5 px-6">Business / School Name</th>
-                      <th className="py-3.5 px-6">Owner / Principal</th>
-                      <th className="py-3.5 px-6">Email</th>
-                      <th className="py-3.5 px-6">Business Type</th>
-                      <th className="py-3.5 px-6">Status</th>
-                      <th className="py-3.5 px-6">SMS Gateway</th>
-                      <th className="py-3.5 px-6">Created Date</th>
-                      <th className="py-3.5 px-6 text-right">Actions</th>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-[11px] uppercase tracking-wider">
+                      <th className="py-3.5 px-4">Business &amp; Identifier</th>
+                      <th className="py-3.5 px-4">Owner &amp; Contact</th>
+                      <th className="py-3.5 px-4">Category &amp; Scale</th>
+                      <th className="py-3.5 px-4">Plan &amp; Subscription</th>
+                      <th className="py-3.5 px-4">Account Status</th>
+                      <th className="py-3.5 px-4">Dates &amp; Activity</th>
+                      <th className="py-3.5 px-4 text-center min-w-[320px] bg-slate-100/70 border-l border-slate-200">Super Admin Actions</th>
                     </tr>
                   </thead>
                   <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
                     {filteredBusinesses.map(bus => {
-                      const subStatus = bus.subscriptionStatus || 'trial';
-                      const isSchool = bus.category?.toLowerCase().includes('school');
+                      const details = getBusinessDetails(bus);
 
                       return (
-                        <tr key={bus.id} className="hover:bg-slate-50/50 transition">
-                          <td className="py-3.5 px-6">
-                            <div className="flex items-center gap-3">
-                              <div className={`h-8 w-8 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 ${
-                                isSchool ? 'bg-indigo-600' : 'bg-emerald-600'
+                        <tr key={bus.id} className="hover:bg-slate-50/70 transition">
+                          {/* 1. Business & Unique Identifier */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="flex items-start gap-2.5">
+                              <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 mt-0.5 shadow-xs ${
+                                details.isSchool ? 'bg-indigo-600' : 'bg-emerald-600'
                               }`}>
-                                {isSchool ? <GraduationCap className="h-4 w-4" /> : bus.name.charAt(0)}
+                                {details.isSchool ? <GraduationCap className="h-4 w-4" /> : bus.name.charAt(0)}
+                              </div>
+                              <div className="space-y-0.5">
+                                <p className="font-extrabold text-slate-900 text-sm leading-snug">{bus.name}</p>
+                                <span className="inline-block text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                                  ID: {bus.id}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 2. Owner Name, Email & Phone */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="space-y-1">
+                              <p className="font-bold text-slate-800 text-xs">{bus.ownerName}</p>
+                              <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
+                                <Mail className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="truncate max-w-[170px]" title={bus.email}>{bus.email}</span>
+                              </p>
+                              <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1">
+                                <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span>{bus.phone || <span className="text-slate-400 italic">No phone</span>}</span>
+                              </p>
+                            </div>
+                          </td>
+
+                          {/* 3. Category, Branches & Staff */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="space-y-1">
+                              <span className={`inline-block px-2 py-0.5 text-[10px] rounded-md font-bold uppercase ${
+                                details.isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {bus.category || bus.businessType || 'General'}
+                              </span>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-600 font-medium">
+                                <span className="flex items-center gap-1" title="Number of branches">
+                                  <GitBranch className="h-3 w-3 text-slate-400" /> {details.branchCount} {details.branchCount === 1 ? 'Branch' : 'Branches'}
+                                </span>
+                                <span className="text-slate-300">&bull;</span>
+                                <span className="flex items-center gap-1" title="Registered employees and users">
+                                  <Users className="h-3 w-3 text-slate-400" /> {details.staffCount} {details.staffCount === 1 ? 'User' : 'Users'}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 4. Plan, Subscription Price & Status */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-extrabold text-slate-800 text-xs">{details.planName}</span>
+                                <span className="font-black text-emerald-800 text-xs bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                                  {details.priceDisplay}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
+                                  details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                                  details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
+                                  'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {details.subStatus}
+                                </span>
+                                {details.formattedNextPay && (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    Next: {details.formattedNextPay}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 5. Account Status (Active/Suspended) & SMS */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="space-y-1.5">
+                              <div>
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase leading-none border ${
+                                  bus.status === 'active'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
+                                  {bus.status === 'active' ? 'Active' : 'Suspended'}
+                                </span>
                               </div>
                               <div>
-                                <p className="font-bold text-slate-800 text-sm">{bus.name}</p>
-                                <p className="text-[10px] text-slate-400 font-mono">ID: {bus.id}</p>
+                                <button
+                                  onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
+                                  disabled={togglingSmsBusId === bus.id}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase transition cursor-pointer ${
+                                    bus.smsEnabled !== false
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                      : 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                                  }`}
+                                  title="Toggle SMS sending for this business"
+                                >
+                                  <span className={`h-1 w-1 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                                  SMS {bus.smsEnabled !== false ? 'Active' : 'Off'}
+                                </button>
                               </div>
                             </div>
                           </td>
-                          <td className="py-3.5 px-6">
-                            <div>
-                              <p className="font-bold text-slate-800">{bus.ownerName}</p>
+
+                          {/* 6. Dates & Timeline */}
+                          <td className="py-4 px-4 align-top">
+                            <div className="space-y-1 text-slate-600">
+                              <p className="text-[11px] flex items-center gap-1">
+                                <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="text-slate-400">Reg:</span>
+                                <span className="font-semibold text-slate-700">{details.formattedRegDate}</span>
+                              </p>
+                              <p className="text-[11px] flex items-center gap-1">
+                                <Clock className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="text-slate-400">Act:</span>
+                                <span className="font-semibold text-slate-700">{details.formattedLastAct}</span>
+                              </p>
                             </div>
                           </td>
-                          <td className="py-3.5 px-6">
-                            <div className="space-y-0.5">
-                              <p className="font-semibold text-slate-600">{bus.email}</p>
-                              {bus.phone && <p className="text-slate-400 text-[11px]">{bus.phone}</p>}
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <span className={`inline-block px-2.5 py-1 text-[10px] rounded-md font-bold uppercase ${
-                              isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
-                            }`}>
-                              {bus.category || 'General'}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold leading-none ${
-                              bus.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                            }`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
-                              {bus.status === 'active' ? 'Active' : 'Suspended'}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <button
-                              onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
-                              disabled={togglingSmsBusId === bus.id}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase transition cursor-pointer ${
-                                bus.smsEnabled !== false
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                                  : 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
-                              }`}
-                              title="Click to toggle SMS sending for this business"
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                              {bus.smsEnabled !== false ? 'SMS Active' : 'SMS Disabled'}
-                            </button>
-                          </td>
-                          <td className="py-3.5 px-6 text-slate-500 font-medium">
-                            {bus.createdAt ? new Date(bus.createdAt).toLocaleDateString() : 'N/A'}
-                          </td>
-                          <td className="py-3.5 px-6 text-right">
+
+                          {/* 7. Action Buttons (ALWAYS VISIBLE & HIGH-CONTRAST) */}
+                          <td className="py-4 px-4 align-middle text-right bg-slate-50/50 border-l border-slate-200 min-w-[320px]">
                             <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                              {/* Action 1: View Details */}
+                              <button
+                                onClick={() => setViewingBusiness(bus)}
+                                className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                                title="View complete business information dossier"
+                              >
+                                <Eye className="h-3.5 w-3.5 text-slate-500" /> View
+                              </button>
+
+                              {/* Action 2: Open / Access Dashboard */}
                               {onManageBusiness && (
                                 <button
                                   onClick={() => onManageBusiness(bus)}
-                                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                  title="Enter Business Workspace"
+                                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
+                                  title={`Open ${details.isSchool ? 'School' : 'Business'} Workspace Dashboard`}
                                 >
-                                  <Building className="h-3.5 w-3.5" /> Workspace
+                                  <Building className="h-3.5 w-3.5" /> Open
                                 </button>
                               )}
+
+                              {/* Action 3: Edit */}
                               <button
                                 onClick={() => handleEditBusinessClick(bus)}
-                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                title="Edit Business Details"
+                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title="Edit Business Parameters & Configuration"
                               >
-                                <Edit className="h-3.5 w-3.5" /> Edit
+                                <Edit className="h-3.5 w-3.5 text-indigo-600" /> Edit
                               </button>
+
+                              {/* Action 4: Suspend / Activate */}
                               <button
                                 onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
-                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
                                   bus.status === 'active' 
-                                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800' 
-                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200' 
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
                                 }`}
                                 title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
                               >
                                 <AlertTriangle className="h-3.5 w-3.5" />
                                 {bus.status === 'active' ? 'Suspend' : 'Activate'}
                               </button>
+
+                              {/* Action 5: Delete */}
                               <button
                                 onClick={() => handleDeleteBusiness(bus.id)}
-                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                title={`Delete ${isSchool ? 'School' : 'Business'} Tenant`}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title={`Permanently Delete ${details.isSchool ? 'School' : 'Business'} and its records`}
                               >
-                                <Trash2 className="h-3.5 w-3.5" /> Delete
-                              </button>
-                              <button
-                                onClick={() => setViewingBusiness(bus)}
-                                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                title="View Business Details"
-                              >
-                                <Eye className="h-3.5 w-3.5" /> View
+                                <Trash2 className="h-3.5 w-3.5 text-rose-600" /> Delete
                               </button>
                             </div>
                           </td>
                         </tr>
                       );
                     })}
+
                     {filteredBusinesses.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-slate-400">
+                        <td colSpan={7} className="py-12 text-center text-slate-400">
                           No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
                         </td>
                       </tr>
@@ -3451,53 +3663,140 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Primary Owner</p>
-                <p className="font-bold text-slate-800 text-sm">{viewingBusiness.ownerName}</p>
-                <p className="text-slate-500 font-mono text-[11px]">{viewingBusiness.email}</p>
-                <p className="text-slate-500 text-[11px]">{viewingBusiness.phone}</p>
-              </div>
+            {(() => {
+              const details = getBusinessDetails(viewingBusiness);
+              const bizBranches = db.getBranches(viewingBusiness.id);
+              const bizStaff = db.getUsers().filter(u => u.businessId === viewingBusiness.id);
 
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Subscription Details</p>
-                <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-slate-800 text-sm uppercase">{viewingBusiness.subscriptionStatus || 'trial'}</span>
-                  <span className="text-emerald-700 font-bold">{viewingBusiness.currency || 'GHC'} {viewingBusiness.subscriptionAmount || 299}/mo</span>
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    {/* Owner & Contact */}
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        {details.isSchool ? 'Principal / Institution Head' : 'Business Owner'}
+                      </p>
+                      <p className="font-extrabold text-slate-800 text-sm">{viewingBusiness.ownerName}</p>
+                      <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1.5">
+                        <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span>{viewingBusiness.email}</span>
+                      </p>
+                      <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1.5">
+                        <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span>{viewingBusiness.phone || 'No phone recorded'}</span>
+                      </p>
+                    </div>
+
+                    {/* Subscription & Pricing */}
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Subscription &amp; Billing</p>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800">{details.planName}</span>
+                        <span className="text-emerald-800 font-black bg-emerald-100/70 px-2 py-0.5 rounded text-xs">
+                          {details.priceDisplay}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                          details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                          details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
+                          'bg-amber-100 text-amber-800'
+                        }`}>
+                          Status: {details.subStatus}
+                        </span>
+                        {details.formattedNextPay && (
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            Next: {details.formattedNextPay}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        Default Currency: <strong className="text-slate-600 font-mono">{viewingBusiness.currency || 'GHC'}</strong>
+                      </p>
+                    </div>
+
+                    {/* Scale: Branches & Staff */}
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Branches &amp; Organization</p>
+                      <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
+                        <GitBranch className="h-4 w-4 text-slate-500" />
+                        <span>{details.branchCount} {details.branchCount === 1 ? 'Registered Branch' : 'Registered Branches'}</span>
+                      </div>
+                      {bizBranches.length > 0 ? (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {bizBranches.map(b => (
+                            <span key={b.id} className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] text-slate-700 font-medium">
+                              {b.name} {b.isMain ? '(Main)' : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">Primary headquarters (default branch)</p>
+                      )}
+                    </div>
+
+                    {/* Users & Staff Directory */}
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Users &amp; Staff Members</p>
+                      <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
+                        <Users className="h-4 w-4 text-slate-500" />
+                        <span>{bizStaff.length} Total Users / Staff</span>
+                      </div>
+                      {bizStaff.length > 0 ? (
+                        <div className="max-h-24 overflow-y-auto space-y-1 pt-1 pr-1">
+                          {bizStaff.map(u => (
+                            <div key={u.id} className="flex items-center justify-between text-[11px] bg-white px-2 py-1 rounded border border-slate-200">
+                              <span className="font-semibold text-slate-700 truncate max-w-[140px]">{u.name}</span>
+                              <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded uppercase">{u.role}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">No subordinate staff accounts</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Dates, System Features & Receipt Config */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registration &amp; Activity</p>
+                      <p className="text-slate-600 flex items-center gap-1.5 text-[11px]">
+                        <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                        Registered On: <strong className="text-slate-800">{details.formattedRegDate}</strong>
+                      </p>
+                      <p className="text-slate-600 flex items-center gap-1.5 text-[11px]">
+                        <Clock className="h-3.5 w-3.5 text-slate-400" />
+                        Last Activity: <strong className="text-slate-800">{details.formattedLastAct}</strong>
+                      </p>
+                      <p className="text-[11px] text-slate-600 pt-1">
+                        SMS Gateway: <strong className={viewingBusiness.smsEnabled !== false ? 'text-emerald-700' : 'text-slate-500'}>
+                          {viewingBusiness.smsEnabled !== false ? 'Enabled' : 'Disabled'}
+                        </strong>
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Receipt Configuration</p>
+                      <p className="text-slate-800 font-bold">{viewingBusiness.receiptConfig?.businessName || viewingBusiness.name}</p>
+                      <p className="text-slate-500 text-[11px] whitespace-pre-line">{viewingBusiness.receiptConfig?.contactInfo || viewingBusiness.phone || 'No custom receipt header'}</p>
+                    </div>
+                  </div>
+
+                  {/* System Features */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Enabled Capabilities &amp; Features</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(viewingBusiness.enabledFeatures || ["sales", "inventory", "customers", "suppliers", "reports"]).map(feat => (
+                        <span key={feat} className="px-2 py-0.5 bg-white border border-slate-200 text-slate-700 rounded font-mono text-[10px] uppercase font-bold">
+                          {feat}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <p className="text-slate-500 text-[11px]">
-                  Registered: {new Date(viewingBusiness.createdAt || viewingBusiness.registrationDate || Date.now()).toLocaleDateString()}
-                </p>
-                <p className="text-slate-500 text-[11px]">
-                  Next Cycle: {viewingBusiness.nextPaymentDate ? new Date(viewingBusiness.nextPaymentDate).toLocaleDateString() : 'Active'}
-                </p>
-              </div>
-
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Staff Directory</p>
-                <p className="font-extrabold text-slate-800 text-sm">
-                  {db.getUsers().filter(u => u.businessId === viewingBusiness.id).length} Active Accounts
-                </p>
-                <p className="text-slate-500 text-[11px]">Includes Owners, Managers, Cashiers &amp; Inventory Staff</p>
-              </div>
-
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">System Features</p>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {(viewingBusiness.enabledFeatures || ["sales", "inventory", "customers", "suppliers", "reports"]).map(feat => (
-                    <span key={feat} className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-mono text-[9px] uppercase font-bold">
-                      {feat}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
-              <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Receipt Configuration</p>
-              <p className="text-slate-700 font-semibold">{viewingBusiness.receiptConfig?.businessName || viewingBusiness.name}</p>
-              <p className="text-slate-500 text-[11px] whitespace-pre-line">{viewingBusiness.receiptConfig?.contactInfo || viewingBusiness.phone}</p>
-            </div>
+              );
+            })()}
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-slate-100">
               <div className="flex items-center gap-2">
@@ -3508,9 +3807,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                       onManageBusiness(viewingBusiness);
                       setViewingBusiness(null);
                     }}
-                    className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition min-h-[40px]"
                   >
-                    <Eye className="h-4 w-4" /> Enter Workspace
+                    <Building className="h-4 w-4" /> Open Workspace
                   </button>
                 )}
                 <button
@@ -3520,7 +3819,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     setViewingBusiness(null);
                     handleEditBusinessClick(busToEdit);
                   }}
-                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition"
+                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition min-h-[40px]"
                 >
                   <Edit className="h-4 w-4" /> Edit Business
                 </button>
@@ -3533,8 +3832,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     handleToggleBusinessStatus(viewingBusiness.id, viewingBusiness.status);
                     setViewingBusiness(prev => prev ? { ...prev, status: prev.status === 'active' ? 'suspended' : 'active' } : null);
                   }}
-                  className={`px-3 py-2 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition ${
-                    viewingBusiness.status === 'active' ? 'bg-amber-50 hover:bg-amber-100 text-amber-800' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  className={`px-3.5 py-2 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition min-h-[40px] border ${
+                    viewingBusiness.status === 'active' ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
                   }`}
                 >
                   <AlertTriangle className="h-4 w-4" /> {viewingBusiness.status === 'active' ? 'Suspend' : 'Activate'}
@@ -3546,14 +3845,14 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     setViewingBusiness(null);
                     handleDeleteBusiness(busIdToDelete);
                   }}
-                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition"
+                  className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition min-h-[40px]"
                 >
                   <Trash2 className="h-4 w-4" /> Delete
                 </button>
                 <button
                   type="button"
                   onClick={() => setViewingBusiness(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer min-h-[40px]"
                 >
                   Close
                 </button>
@@ -3574,9 +3873,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
                 <div>
                   <h3 className="font-extrabold text-slate-900 text-base">
-                    Delete Registered {deletingBusinessTarget.category === 'school' ? 'School' : 'Business'}
+                    Delete Business?
                   </h3>
-                  <p className="text-xs text-rose-600 font-semibold">Permanent Cloud &amp; Database Purge</p>
+                  <p className="text-xs text-rose-600 font-semibold">Permanent Database Deletion</p>
                 </div>
               </div>
               {!isDeletingInProgress && (
@@ -3595,10 +3894,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
                 <div>
                   <strong>
-                    Are you sure you want to permanently delete &ldquo;{deletingBusinessTarget.name}&rdquo;?
+                    This will permanently delete the business and all of its associated data. This action cannot be undone.
                   </strong>
                   <p className="text-rose-700 font-normal mt-1">
-                    This action is permanent and cannot be undone. All tenant data tied to ID <span className="font-mono font-bold text-rose-900">{deletingBusinessTarget.id}</span> will be purged from Firebase and cloud storage immediately.
+                    All records for &ldquo;{deletingBusinessTarget.name}&rdquo; (ID: <span className="font-mono font-bold text-rose-900">{deletingBusinessTarget.id}</span>) including products, sales, customers, employees, subcollections, and settings will be permanently erased from Firestore.
                   </p>
                 </div>
               </div>
@@ -3675,39 +3974,50 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               )}
             </div>
 
-            {/* Loading Overlay or Action Buttons */}
-            {isDeletingInProgress ? (
-              <div className="p-6 bg-slate-900 text-white rounded-2xl flex flex-col items-center justify-center gap-3 text-center">
-                <RefreshCw className="h-8 w-8 text-rose-500 animate-spin" />
+            {/* Progress indicator during deletion */}
+            {isDeletingInProgress && (
+              <div className="p-4 bg-slate-900 text-white rounded-2xl flex items-center gap-3 text-left">
+                <RefreshCw className="h-6 w-6 text-rose-500 animate-spin shrink-0" />
                 <div>
-                  <p className="font-black text-sm">Deleting tenant and purging all cloud data...</p>
-                  <p className="text-xs text-slate-400 mt-1">Please wait while database documents, users, and audit records are wiped.</p>
+                  <p className="font-bold text-xs">Permanently deleting business and purging records...</p>
+                  <p className="text-[11px] text-slate-400">Erasing Firestore documents, collections, and authentication credentials.</p>
                 </div>
               </div>
-            ) : (
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  id="btn-cancel-delete-biz"
-                  onClick={() => {
-                    setDeletingBusinessTarget(null);
-                    setDeleteConfirmInput('');
-                  }}
-                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[44px]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  id="btn-confirm-delete-biz"
-                  disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
-                  onClick={executeDeleteBusiness}
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[44px]"
-                >
-                  <Trash2 className="h-4 w-4" /> Permanently Delete
-                </button>
-              </div>
             )}
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                id="btn-cancel-delete-biz"
+                disabled={isDeletingInProgress}
+                onClick={() => {
+                  setDeletingBusinessTarget(null);
+                  setDeleteConfirmInput('');
+                  setDeleteErrorMessage(null);
+                }}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-delete-biz"
+                disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
+                onClick={executeDeleteBusiness}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[44px]"
+              >
+                {isDeletingInProgress ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" /> Delete Permanently
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

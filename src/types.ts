@@ -138,6 +138,7 @@ export interface Business {
   priceUpdatedAt?: string; // Timestamp when Super Admin last set/updated the price
   priceUpdatedBy?: string; // Who updated the pricing (e.g. 'Super Admin')
   updatedAt?: string; // Last update timestamp
+  subscriptionPlan?: string; // Optional custom or legacy plan name
   receiptConfig: {
     logoUrl?: string;
     businessName?: string;
@@ -179,6 +180,7 @@ export type UserRole =
 export interface User {
   id: string;
   businessId: string; // 'platform' for Super Admin
+  schoolId?: string; // Optional educational institution reference
   name: string;
   email: string;
   role: UserRole;
@@ -402,6 +404,7 @@ export interface Branch {
   name: string;
   location: string;
   createdAt: string;
+  isMain?: boolean;
 }
 
 export interface StockTransfer {

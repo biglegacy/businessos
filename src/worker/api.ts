@@ -231,7 +231,17 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
 
   // 7. Database Sync
   if (path === '/api/db/sync') {
-    return jsonResponse(defaultDb);
+    const cleanedDb: any = { ...defaultDb };
+    if (globalThis.__deletedBusinessIds && globalThis.__deletedBusinessIds.size > 0) {
+      if (Array.isArray(cleanedDb.bos_businesses)) {
+        cleanedDb.bos_businesses = cleanedDb.bos_businesses.filter((b: any) => b && b.id && !globalThis.__deletedBusinessIds.has(b.id));
+      }
+      if (Array.isArray(cleanedDb.businesses)) {
+        cleanedDb.businesses = cleanedDb.businesses.filter((b: any) => b && b.id && !globalThis.__deletedBusinessIds.has(b.id));
+      }
+      cleanedDb.bos_deleted_business_ids = Array.from(globalThis.__deletedBusinessIds);
+    }
+    return jsonResponse(cleanedDb);
   }
 
   // 8. Database Save
@@ -244,6 +254,10 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
   if ((path.startsWith('/api/admin/business/') && method === 'DELETE') || (path === '/api/db/delete-business' && method === 'POST')) {
     const segments = path.split('/');
     const businessId = method === 'DELETE' ? segments[segments.length - 1] : (await readJsonBody(request)).businessId;
+    if (businessId) {
+      if (!globalThis.__deletedBusinessIds) globalThis.__deletedBusinessIds = new Set<string>();
+      globalThis.__deletedBusinessIds.add(businessId);
+    }
     return jsonResponse({
       success: true,
       businessId,

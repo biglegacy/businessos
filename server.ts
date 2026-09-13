@@ -5,6 +5,18 @@ import { createServer as createViteServer } from 'vite';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp as initClientApp, getApps as getClientApps } from 'firebase/app';
+import {
+  initializeFirestore as initClientFirestore,
+  doc as fsDoc,
+  deleteDoc as fsDeleteDoc,
+  setDoc as fsSetDoc,
+  collection as fsCollection,
+  getDocs as fsGetDocs,
+  query as fsQuery,
+  where as fsWhere,
+  writeBatch as fsWriteBatch
+} from 'firebase/firestore';
 
 const app = express();
 const PORT = 3000;
@@ -22,7 +34,7 @@ try {
   console.warn('Could not read firebase-applet-config.json:', e);
 }
 
-// Initialize Firebase Admin SDK
+// Initialize Firebase Admin SDK (optional / best-effort)
 if (!getApps().length && firebaseConfig.projectId) {
   try {
     initializeApp({
@@ -32,6 +44,19 @@ if (!getApps().length && firebaseConfig.projectId) {
   } catch (e) {
     console.warn('[Firebase Admin] Initialize note:', e);
   }
+}
+
+// Initialize Client Firestore SDK on server (works without ADC credentials for Firestore)
+let serverFsDb: any = null;
+try {
+  if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+    const existingApp = getClientApps().find(a => a.name === 'server-firestore');
+    const clientApp = existingApp || initClientApp(firebaseConfig, 'server-firestore');
+    serverFsDb = initClientFirestore(clientApp, {}, firebaseConfig.firestoreDatabaseId);
+    console.log('[Server Firestore SDK] Connected to database:', firebaseConfig.firestoreDatabaseId);
+  }
+} catch (e) {
+  console.warn('[Server Firestore SDK] Init note:', e);
 }
 
 // Helper to get Firestore database instance safely
@@ -53,12 +78,22 @@ function readDatabase(): Record<string, any[]> {
       const data = JSON.parse(content) || {};
       const deletedIds = new Set(data['bos_deleted_business_ids'] || []);
       if (deletedIds.size > 0) {
-        if (Array.isArray(data['bos_businesses'])) {
-          data['bos_businesses'] = data['bos_businesses'].filter((b: any) => b && b.id && !deletedIds.has(b.id));
-        }
-        if (Array.isArray(data['businesses'])) {
-          data['businesses'] = data['businesses'].filter((b: any) => b && b.id && !deletedIds.has(b.id));
-        }
+        Object.keys(data).forEach(key => {
+          if (Array.isArray(data[key])) {
+            if (key === 'bos_businesses' || key === 'businesses') {
+              data[key] = data[key].filter((b: any) => b && b.id && !deletedIds.has(b.id));
+            } else if (key !== 'bos_deleted_business_ids') {
+              data[key] = data[key].filter((item: any) => {
+                if (!item) return false;
+                if (item.id && deletedIds.has(item.id)) return false;
+                if (item.businessId && deletedIds.has(item.businessId)) return false;
+                if (item.schoolId && deletedIds.has(item.schoolId)) return false;
+                if (item.business_id && deletedIds.has(item.business_id)) return false;
+                return true;
+              });
+            }
+          }
+        });
       }
       return data;
     }
@@ -117,7 +152,14 @@ app.post('/api/db/save', (req, res) => {
     if (key === 'bos_businesses' || key === 'businesses') {
       cleanData = cleanData.filter((b: any) => b && b.id && !deletedIds.has(b.id));
     } else if (key !== 'bos_deleted_business_ids') {
-      cleanData = cleanData.filter((item: any) => !item || !item.businessId || !deletedIds.has(item.businessId));
+      cleanData = cleanData.filter((item: any) => {
+        if (!item) return false;
+        if (item.id && deletedIds.has(String(item.id))) return false;
+        if (item.businessId && deletedIds.has(String(item.businessId))) return false;
+        if (item.schoolId && deletedIds.has(String(item.schoolId))) return false;
+        if (item.business_id && deletedIds.has(String(item.business_id))) return false;
+        return true;
+      });
     }
 
     dbData[key] = cleanData;
@@ -826,109 +868,126 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
   writeDatabase(dbData);
   console.log(`[Super Admin] Atomically purged business ID: ${businessId} (${totalPurgedRecords} records removed) from cloud_db.json`);
 
-  // STEP 2: Non-blocking asynchronous cleanup of Firebase Auth accounts and Firestore documents
+  // STEP 2: Purge Firestore documents and collections directly using Client SDK on server
+  if (serverFsDb) {
+    try {
+      // 1. Delete main business documents
+      await fsDeleteDoc(fsDoc(serverFsDb, 'bos_businesses', businessId)).catch(() => {});
+      await fsDeleteDoc(fsDoc(serverFsDb, 'businesses', businessId)).catch(() => {});
+
+      // 1b. Recursively delete subcollections under both bos_businesses/{businessId} and businesses/{businessId}
+      const subcollectionsToPurge = [
+        'branches', 'products', 'customers', 'sales', 'expenses', 'employees',
+        'users', 'auditLogs', 'logs', 'settings', 'inventory', 'transactions',
+        'suppliers', 'notifications', 'services', 'classes', 'students', 'teachers',
+        'prescriptions', 'batches', 'timetable', 'attendance', 'grades', 'orders',
+        'receipts', 'returns', 'stock', 'tables', 'appointments'
+      ];
+
+      await Promise.allSettled(
+        subcollectionsToPurge.flatMap(sub => [
+          (async () => {
+            try {
+              const snap = await fsGetDocs(fsCollection(serverFsDb, 'bos_businesses', businessId, sub));
+              if (!snap.empty) {
+                const batch = fsWriteBatch(serverFsDb);
+                snap.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+              }
+            } catch (e) {}
+          })(),
+          (async () => {
+            try {
+              const snap = await fsGetDocs(fsCollection(serverFsDb, 'businesses', businessId, sub));
+              if (!snap.empty) {
+                const batch = fsWriteBatch(serverFsDb);
+                snap.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+              }
+            } catch (e) {}
+          })()
+        ])
+      );
+
+      // 2. Persist tombstone in Firestore
+      await fsSetDoc(fsDoc(serverFsDb, 'bos_deleted_business_ids', businessId), {
+        id: businessId,
+        businessId,
+        deletedAt: new Date().toISOString()
+      }).catch(() => {});
+
+      // 3. Purge related top-level collections
+      const collectionsToPurge = [
+        'businesses', 'bos_businesses', 'users', 'bos_users', 'products', 'bos_products',
+        'inventory', 'bos_services', 'sales', 'bos_sales', 'customers', 'bos_customers',
+        'suppliers', 'bos_suppliers', 'employees', 'bos_salon_staff', 'transactions',
+        'bos_payment_transactions', 'expenses', 'bos_expenses', 'payments', 'subscriptions',
+        'notifications', 'bos_notifications', 'settings', 'bos_printer_settings', 'bos_paynow_settings',
+        'reports', 'bos_logs', 'bos_feature_audit_logs', 'bos_branches', 'bos_customer_returns',
+        'bos_supplier_returns', 'bos_stock_transfers', 'bos_global_features', 'bos_service_jobs',
+        'bos_menu_items', 'bos_ingredients', 'bos_recipes', 'bos_restaurant_tables',
+        'bos_restaurant_orders', 'bos_reservations', 'bos_fast_food_orders', 'bos_fast_food_ingredients',
+        'bos_fast_food_menu_items', 'bos_fast_food_recipes', 'bos_notification_preferences',
+        'bos_push_device_tokens', 'bos_notification_logs', 'bos_salon_appointments',
+        'bos_laundry_orders', 'bos_laundry_services', 'bos_scanner_sessions', 'bos_scanned_items',
+        'bos_print_commands', 'bos_travel_customers', 'bos_travel_bookings', 'bos_travel_flights',
+        'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports', 'bos_travel_packages',
+        'bos_travel_transports', 'bos_travel_insurances', 'bos_travel_suppliers', 'bos_travel_partners',
+        'bos_travel_documents', 'bos_travel_marketings', 'bos_students', 'bos_teachers',
+        'bos_classes', 'bos_fee_invoices', 'bos_fee_payments', 'bos_attendance',
+        'bos_exam_grades', 'bos_timetable', 'bos_school_announcements'
+      ];
+
+      await withTimeout(
+        Promise.allSettled(
+          collectionsToPurge.map(async (colName) => {
+            try {
+              await fsDeleteDoc(fsDoc(serverFsDb, colName, businessId)).catch(() => {});
+            } catch (e) {}
+
+            try {
+              const q1 = fsQuery(fsCollection(serverFsDb, colName), fsWhere('businessId', '==', businessId));
+              const snap1 = await fsGetDocs(q1);
+              if (!snap1.empty) {
+                const batch = fsWriteBatch(serverFsDb);
+                snap1.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+              }
+            } catch (e) {}
+
+            try {
+              const q2 = fsQuery(fsCollection(serverFsDb, colName), fsWhere('schoolId', '==', businessId));
+              const snap2 = await fsGetDocs(q2);
+              if (!snap2.empty) {
+                const batch = fsWriteBatch(serverFsDb);
+                snap2.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+              }
+            } catch (e) {}
+          })
+        ),
+        8000
+      ).catch(() => {});
+      console.log(`[Server Firestore SDK] Purged all Firestore data for business: ${businessId}`);
+    } catch (fsErr) {
+      console.warn('[Server Firestore SDK] Error purging documents:', fsErr);
+    }
+  }
+
+  // STEP 3: Cleanup Firebase Admin Auth accounts (if Admin SDK is available)
   let deletedAuthAccountsCount = 0;
   if (getApps().length) {
-    // Run asynchronously in background without blocking response
-    (async () => {
-      try {
-        const authAdmin = getAuth();
-        for (const email of Array.from(userEmailsToDelete)) {
-          try {
-            const userRecord = await withTimeout(authAdmin.getUserByEmail(email), 800);
-            if (userRecord && userRecord.uid) {
-              await withTimeout(authAdmin.deleteUser(userRecord.uid), 800);
-              deletedAuthAccountsCount++;
-              console.log(`[Firebase Admin Auth] Deleted user account: ${email}`);
-            }
-          } catch (authErr: any) {}
-        }
-      } catch (e) {}
-
-      // Purge Firestore collections
-      try {
-        const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
-        const firestoreDb = getFirestore(undefined, dbId);
-        const collectionsToPurge = [
-          'businesses', 'bos_businesses', 'users', 'bos_users', 'products', 'bos_products',
-          'inventory', 'bos_services', 'sales', 'bos_sales', 'customers', 'bos_customers',
-          'suppliers', 'bos_suppliers', 'employees', 'bos_salon_staff', 'transactions',
-          'bos_payment_transactions', 'expenses', 'bos_expenses', 'payments', 'subscriptions',
-          'notifications', 'bos_notifications', 'settings', 'bos_printer_settings', 'bos_paynow_settings',
-          'reports', 'bos_logs', 'bos_feature_audit_logs', 'bos_branches', 'bos_customer_returns',
-          'bos_supplier_returns', 'bos_stock_transfers', 'bos_global_features', 'bos_service_jobs',
-          'bos_menu_items', 'bos_ingredients', 'bos_recipes', 'bos_restaurant_tables',
-          'bos_restaurant_orders', 'bos_reservations', 'bos_fast_food_orders', 'bos_fast_food_ingredients',
-          'bos_fast_food_menu_items', 'bos_fast_food_recipes', 'bos_notification_preferences',
-          'bos_push_device_tokens', 'bos_notification_logs', 'bos_salon_appointments',
-          'bos_laundry_orders', 'bos_laundry_services', 'bos_scanner_sessions', 'bos_scanned_items',
-          'bos_print_commands', 'bos_travel_customers', 'bos_travel_bookings', 'bos_travel_flights',
-          'bos_travel_hotels', 'bos_travel_visas', 'bos_travel_passports', 'bos_travel_packages',
-          'bos_travel_transports', 'bos_travel_insurances', 'bos_travel_suppliers', 'bos_travel_partners',
-          'bos_travel_documents', 'bos_travel_marketings', 'bos_students', 'bos_teachers',
-          'bos_classes', 'bos_fee_invoices', 'bos_fee_payments', 'bos_attendance',
-          'bos_exam_grades', 'bos_timetable', 'bos_school_announcements'
-        ];
-
-        for (const colName of collectionsToPurge) {
-          try {
-            await withTimeout(firestoreDb.collection(colName).doc(businessId).delete(), 400);
-          } catch (e) {}
-          try {
-            const snap = await withTimeout(firestoreDb.collection(colName).where('businessId', '==', businessId).limit(50).get(), 500);
-            if (snap && !snap.empty) {
-              const batch = firestoreDb.batch();
-              snap.docs.forEach(d => batch.delete(d.ref));
-              await withTimeout(batch.commit(), 500);
-            }
-          } catch (e) {}
-        }
-      } catch (fsErr) {}
-
-      // Purge via Firestore REST API (using public web API key & project ID)
-      try {
-        if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-          const proj = firebaseConfig.projectId;
-          const key = firebaseConfig.apiKey;
-          const collections = ['bos_businesses', 'businesses', 'bos_products', 'bos_sales', 'bos_customers', 'bos_users'];
-          for (const c of collections) {
-            fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/${c}/${businessId}?key=${key}`, {
-              method: 'DELETE'
-            }).catch(() => {});
-          }
-          // Record tombstone in Firestore
-          fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_deleted_business_ids/${businessId}?key=${key}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fields: {
-                businessId: { stringValue: businessId },
-                deletedAt: { stringValue: new Date().toISOString() }
-              }
-            })
-          }).catch(() => {});
-        }
-      } catch (restErr) {}
-    })().catch(err => console.warn('Background cleanup note:', err));
-  } else {
-    // Even if Admin SDK is not initialized, purge via Firestore REST API directly
     try {
-      if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-        const proj = firebaseConfig.projectId;
-        const key = firebaseConfig.apiKey;
-        fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_businesses/${businessId}?key=${key}`, {
-          method: 'DELETE'
-        }).catch(() => {});
-        fetch(`https://firestore.googleapis.com/v1/projects/${proj}/databases/(default)/documents/bos_deleted_business_ids/${businessId}?key=${key}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fields: {
-              businessId: { stringValue: businessId },
-              deletedAt: { stringValue: new Date().toISOString() }
-            }
-          })
-        }).catch(() => {});
+      const authAdmin = getAuth();
+      for (const email of Array.from(userEmailsToDelete)) {
+        try {
+          const userRecord = await withTimeout(authAdmin.getUserByEmail(email), 800);
+          if (userRecord && userRecord.uid) {
+            await withTimeout(authAdmin.deleteUser(userRecord.uid), 800);
+            deletedAuthAccountsCount++;
+            console.log(`[Firebase Admin Auth] Deleted user account: ${email}`);
+          }
+        } catch (authErr: any) {}
       }
     } catch (e) {}
   }
@@ -947,13 +1006,37 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
 app.delete('/api/admin/business/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const isSuperAdmin = req.headers['x-super-admin'] === 'true';
+
+    // Enforce Super Admin authorization
+    if (!isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden: Only authenticated Super Admin can perform permanent business deletion.'
+      });
+    }
+
+    if (!businessId || typeof businessId !== 'string' || businessId.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid businessId parameter'
+      });
+    }
+
+    if (businessId === 'platform' || businessId === 'system') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot delete platform system workspace'
+      });
+    }
+
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
     
     // Perform permanent deletion
-    const result = await performPermanentBusinessDeletion(businessId, clientIp, {
-      id: 'superadmin',
-      email: 'admin@businessos.com',
-      name: 'Super Admin'
+    const result = await performPermanentBusinessDeletion(businessId.trim(), clientIp, {
+      id: req.headers['x-admin-id'] || 'superadmin',
+      email: req.headers['x-admin-email'] || 'admin@businessos.com',
+      name: req.headers['x-admin-name'] || 'Super Admin'
     });
 
     return res.json(result);

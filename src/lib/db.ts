@@ -4,7 +4,7 @@
  */
 
 import { Business, User, Product, Service, Customer, Sale, Expense, ActivityLog, Branch, StockTransfer, CustomerReturn, SupplierReturn, GlobalFeature, AdminFeatureChangeLog, ProfessionalServiceJob, MenuItem, Ingredient, Recipe, RestaurantTable, RestaurantOrder, Reservation, Supplier, Notification, PrinterSettings, PaystackSettings, PaymentTransaction, GlobalSystemConfig, NotificationPreferences, PushDeviceToken, NotificationLog, SalonAppointment, SalonStaff, LaundryOrder, LaundryService, ScannerSession, ScannedItemPayload, PrintCommand, REQUIRED_BUSINESS_TYPES, TravelCustomer, TravelBooking, TravelFlight, TravelHotel, TravelVisa, TravelPassport, TravelPackage, TravelTransport, TravelInsurance, TravelSupplier, TravelPartner, TravelDocument, TravelMarketing, Student, Teacher, SchoolClass, FeeInvoice, FeePayment, AttendanceRecord, ExamGrade, SchoolTimetableEntry, SchoolAnnouncement, SmsSettings, WhatsAppSettings, BusinessPopupPrompt, SmsTimingDetails, PharmacyBatch, Prescription } from '../types';
-import { firestore, doc, setDoc, deleteDoc, collection, onSnapshot, storage, ref, uploadString, getDownloadURL, handleFirestoreError, OperationType } from './firebase';
+import { firestore, doc, setDoc, deleteDoc, collection, onSnapshot, getDocs, getDoc, writeBatch, query, where, storage, ref, uploadString, getDownloadURL, handleFirestoreError, OperationType } from './firebase';
 
 export const ALL_DB_KEYS = [
   'bos_businesses', 'bos_users', 'bos_products', 'bos_services',
@@ -41,12 +41,26 @@ function mergeRecordArrays(localItems: any[], cloudItems: any[], collectionKey?:
     if (raw) deletedBusinessIds = JSON.parse(raw) || [];
   } catch (e) {}
 
+  if (collectionKey === 'bos_deleted_business_ids') {
+    const cloudIds = (Array.isArray(cloudItems) ? cloudItems : []).map(item => {
+      if (typeof item === 'string') return item;
+      return item?.id || item?.businessId;
+    }).filter(Boolean);
+    const combined = Array.from(new Set([...deletedBusinessIds, ...cloudIds]));
+    try {
+      localStorage.setItem('bos_deleted_business_ids', JSON.stringify(combined));
+    } catch (e) {}
+    return combined.map(id => ({ id, businessId: id, deletedAt: new Date().toISOString() }));
+  }
+
   const deletedSet = new Set(deletedBusinessIds);
 
   const isDeleted = (item: any) => {
     if (!item) return true;
     if (item.id && deletedSet.has(String(item.id))) return true;
     if (item.businessId && deletedSet.has(String(item.businessId))) return true;
+    if (item.schoolId && deletedSet.has(String(item.schoolId))) return true;
+    if (item.business_id && deletedSet.has(String(item.business_id))) return true;
     return false;
   };
 
@@ -427,9 +441,19 @@ class CloudDatabase {
         }
       });
 
+      let deletedIds: string[] = [];
+      try {
+        const raw = localStorage.getItem('bos_deleted_business_ids');
+        if (raw) deletedIds = JSON.parse(raw) || [];
+      } catch (e) {}
+      const deletedSet = new Set(deletedIds);
+
       // Set or update all active documents in Firestore
       updatedData.forEach((item: any) => {
         if (item && item.id) {
+          if (deletedSet.has(String(item.id)) || (item.businessId && deletedSet.has(String(item.businessId))) || (item.schoolId && deletedSet.has(String(item.schoolId)))) {
+            return; // Skip writing deleted records
+          }
           // Exclude raw undefined values before saving to Firestore
           const cleanItem = JSON.parse(JSON.stringify(item));
           setDoc(doc(firestore, key, String(item.id)), cleanItem, { merge: true }).catch(err => {
@@ -640,9 +664,18 @@ class CloudDatabase {
   // --- BUSINESS OPERATIONS ---
   public getBusinesses(): Business[] {
     const list = this.read<Business>('bos_businesses');
+    let deletedIds: string[] = [];
+    try {
+      const raw = localStorage.getItem('bos_deleted_business_ids');
+      if (raw) deletedIds = JSON.parse(raw) || [];
+    } catch (e) {}
+    const deletedSet = new Set(deletedIds);
+
     const requiredFeatures = ["sales", "inventory", "customers", "suppliers", "reports", "restaurant"];
     let hasChanged = false;
-    const updated = list.map(b => {
+    const activeList = list.filter(b => b && b.id && !deletedSet.has(b.id));
+
+    const updated = activeList.map(b => {
       if (!b.enabledFeatures || b.enabledFeatures.length !== requiredFeatures.length || !requiredFeatures.every(rf => b.enabledFeatures?.includes(rf))) {
         hasChanged = true;
         return {
@@ -766,7 +799,7 @@ class CloudDatabase {
   }
 
   public purgeLocalBusinessData(id: string): void {
-    // Record tombstone in localStorage
+    // Record tombstone in localStorage and sessionStorage
     let deletedIds: string[] = [];
     try {
       const raw = localStorage.getItem('bos_deleted_business_ids');
@@ -775,25 +808,36 @@ class CloudDatabase {
 
     if (!deletedIds.includes(id)) {
       deletedIds.push(id);
-      localStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+      try {
+        localStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+        sessionStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+      } catch (e) {}
     }
 
     // Local state purge across ALL_DB_KEYS
     ALL_DB_KEYS.forEach(key => {
-      if (key === 'bos_businesses') {
-        const filtered = this.getBusinesses().filter(b => b && b.id !== id);
+      if (key === 'bos_businesses' || key === 'businesses') {
+        const rawBusinesses = this.read<Business>('bos_businesses');
+        const filtered = rawBusinesses.filter(b => b && b.id !== id);
         this.write('bos_businesses', filtered);
         localStorage.setItem('cloud_bos_businesses', JSON.stringify(filtered));
-      } else {
+      } else if (key !== 'bos_deleted_business_ids') {
         const items = this.read<any>(key);
-        const filtered = items.filter((item: any) => item && item.businessId !== id && item.id !== id);
+        const filtered = items.filter((item: any) => {
+          if (!item) return false;
+          if (item.id === id) return false;
+          if (item.businessId === id) return false;
+          if (item.schoolId === id) return false;
+          if (item.business_id === id) return false;
+          return true;
+        });
         this.write(key, filtered);
         localStorage.setItem('cloud_' + key, JSON.stringify(filtered));
       }
     });
 
     const currentUser = this.getCurrentUser();
-    if (currentUser && currentUser.businessId === id) {
+    if (currentUser && (currentUser.businessId === id || currentUser.schoolId === id)) {
       this.logout();
     }
 
@@ -804,15 +848,29 @@ class CloudDatabase {
     id: string,
     superAdminUser?: { id?: string; email?: string; name?: string }
   ): Promise<{ success: boolean; message: string }> {
+    // 0. Authorization check: Only Super Admin can delete a business
+    const currentUser = this.getCurrentUser();
+    const isSuperAdmin = (currentUser && (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'admin' || currentUser.email === 'admin@businessos.com' || currentUser.email === 'su@admin')) ||
+      (superAdminUser && (superAdminUser.email === 'admin@businessos.com' || superAdminUser.email === 'su@admin'));
+
+    if (!isSuperAdmin) {
+      throw new Error('Unauthorized: Only platform Super Admin can permanently delete businesses.');
+    }
+
+    if (!id || typeof id !== 'string' || id.trim() === '' || id === 'platform') {
+      throw new Error('Invalid business ID provided for deletion.');
+    }
+
     const targetBus = this.getBusinesses().find(b => b.id === id);
     const busName = targetBus ? targetBus.name : id;
 
-    // 1. Gather all Firestore document IDs belonging to this business BEFORE purging local memory
+    // 1. Gather all document IDs belonging to this business before purging local memory
     const docsToDelete: { collection: string; docId: string }[] = [];
     ALL_DB_KEYS.forEach(key => {
+      if (key === 'bos_deleted_business_ids') return;
       const items = this.read<any>(key);
       items.forEach((item: any) => {
-        if (item && ((key === 'bos_businesses' && item.id === id) || item.businessId === id || item.schoolId === id || item.id === id)) {
+        if (item && ((key === 'bos_businesses' && item.id === id) || item.businessId === id || item.schoolId === id || item.id === id || item.business_id === id)) {
           if (item.id) {
             docsToDelete.push({ collection: key, docId: String(item.id) });
           }
@@ -820,80 +878,165 @@ class CloudDatabase {
       });
     });
 
+    // 2. Persist tombstone in Firestore immediately
     try {
-      // 2. Call secure backend endpoint DELETE /api/admin/business/:businessId
-      let res = await fetch(`/api/admin/business/${id}`, {
+      await setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
+        id,
+        businessId: id,
+        deletedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('Firestore set tombstone note:', e);
+    }
+
+    // 3. Delete main business documents from Firestore
+    try {
+      await deleteDoc(doc(firestore, 'bos_businesses', id));
+      await deleteDoc(doc(firestore, 'businesses', id));
+    } catch (e) {
+      console.warn('Firestore delete business doc note:', e);
+    }
+
+    // 4. Recursively delete subcollections under bos_businesses/{id} and businesses/{id}
+    const subcollections = [
+      'branches', 'products', 'customers', 'sales', 'expenses', 'employees',
+      'users', 'auditLogs', 'logs', 'settings', 'inventory', 'transactions',
+      'suppliers', 'notifications', 'services', 'classes', 'students', 'teachers',
+      'prescriptions', 'batches', 'timetable', 'attendance', 'grades', 'orders',
+      'receipts', 'returns', 'stock', 'tables', 'appointments'
+    ];
+
+    await Promise.allSettled(
+      subcollections.flatMap(sub => [
+        (async () => {
+          try {
+            const subSnap = await getDocs(collection(firestore, 'bos_businesses', id, sub));
+            if (!subSnap.empty) {
+              const b = writeBatch(firestore);
+              subSnap.docs.forEach(d => b.delete(d.ref));
+              await b.commit();
+            }
+          } catch (e) {}
+        })(),
+        (async () => {
+          try {
+            const subSnap = await getDocs(collection(firestore, 'businesses', id, sub));
+            if (!subSnap.empty) {
+              const b = writeBatch(firestore);
+              subSnap.docs.forEach(d => b.delete(d.ref));
+              await b.commit();
+            }
+          } catch (e) {}
+        })()
+      ])
+    );
+
+    // 5. Delete collected local documents from Firestore
+    if (docsToDelete.length > 0) {
+      try {
+        await Promise.allSettled(
+          docsToDelete.map(d => deleteDoc(doc(firestore, d.collection, d.docId)))
+        );
+      } catch (e) {}
+    }
+
+    // 6. Call server endpoint to purge backend storage, cloud_db.json, and Firebase Admin Auth
+    try {
+      const serverRes = await fetch(`/api/admin/business/${id}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          'x-super-admin': 'true'
+          'x-super-admin': 'true',
+          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
+          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
+        }
+      });
+      if (!serverRes.ok) {
+        console.warn('Backend deletion response status:', serverRes.status);
+      }
+    } catch (err: any) {
+      console.warn('Backend deletion fetch note:', err);
+    }
+
+    // 7. Verify Firestore document is truly deleted
+    try {
+      const checkDoc1 = await getDoc(doc(firestore, 'bos_businesses', id));
+      const checkDoc2 = await getDoc(doc(firestore, 'businesses', id));
+      if (checkDoc1.exists()) {
+        await deleteDoc(doc(firestore, 'bos_businesses', id));
+      }
+      if (checkDoc2.exists()) {
+        await deleteDoc(doc(firestore, 'businesses', id));
+      }
+    } catch (e) {}
+
+    // 8. Purge local cache and notify listeners
+    this.purgeLocalBusinessData(id);
+
+    // 9. Record successful audit log entry
+    const auditLog = {
+      id: 'audit-del-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      action: 'DELETE_BUSINESS',
+      businessId: id,
+      businessName: busName,
+      superAdminId: superAdminUser?.id || currentUser?.id || 'superadmin',
+      superAdminEmail: superAdminUser?.email || currentUser?.email || 'admin@businessos.com',
+      timestamp: new Date().toISOString(),
+      ipAddress: '127.0.0.1',
+      status: 'Success' as const,
+      details: `Super Admin (${currentUser?.email || superAdminUser?.email || 'admin'}) permanently deleted business "${busName}" (ID: ${id}) and purged all cloud database records.`
+    };
+
+    const existingAudit = this.read<any>('bos_feature_audit_logs');
+    this.write('bos_feature_audit_logs', [auditLog, ...existingAudit]);
+    const existingLogs = this.read<any>('bos_logs');
+    this.write('bos_logs', [auditLog, ...existingLogs]);
+
+    this.notifyListeners();
+    return { success: true, message: `Business "${busName}" has been permanently deleted.` };
+  }
+
+  public async fetchBusinessesFromFirestore(): Promise<Business[]> {
+    try {
+      const colRef = collection(firestore, 'bos_businesses');
+      const snap = await getDocs(colRef);
+      let deletedIds: string[] = [];
+      try {
+        const raw = localStorage.getItem('bos_deleted_business_ids');
+        if (raw) deletedIds = JSON.parse(raw) || [];
+      } catch (e) {}
+      const deletedSet = new Set(deletedIds);
+
+      const items: Business[] = [];
+      snap.forEach(d => {
+        if (!deletedSet.has(d.id)) {
+          items.push({ id: d.id, ...d.data() } as Business);
         }
       });
 
-      if (!res.ok) {
-        // Fallback call to compatibility endpoint
-        res = await fetch('/api/db/delete-business', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            businessId: id,
-            superAdminId: superAdminUser?.id || 'superadmin',
-            superAdminEmail: superAdminUser?.email || 'admin@businessos.com',
-            superAdminName: superAdminUser?.name || 'Super Admin'
-          })
-        });
-      }
-
-      // 3. Purge local cache, local tombstones, and force business removal immediately
-      this.purgeLocalBusinessData(id);
-
-      // 4. Record tombstone in Firestore and purge Firestore documents
-      try {
-        setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
-          id,
-          businessId: id,
-          deletedAt: new Date().toISOString()
-        }).catch(() => {});
-        deleteDoc(doc(firestore, 'bos_businesses', id)).catch(() => {});
-        deleteDoc(doc(firestore, 'businesses', id)).catch(() => {});
-      } catch (e) {}
-
-      // Asynchronously purge any client-side Firestore documents collected
-      docsToDelete.forEach(({ collection, docId }) => {
-        deleteDoc(doc(firestore, collection, docId)).catch(() => {});
-      });
-
-      // 5. Record successful audit log entry
-      const auditLog = {
-        id: 'audit-del-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-        action: 'DELETE_BUSINESS',
-        businessId: id,
-        businessName: busName,
-        superAdminId: superAdminUser?.id || 'superadmin',
-        superAdminEmail: superAdminUser?.email || 'admin@businessos.com',
-        timestamp: new Date().toISOString(),
-        ipAddress: '127.0.0.1',
-        status: 'Success' as const,
-        details: `Super Admin (${superAdminUser?.email || 'admin'}) permanently deleted business "${busName}" (ID: ${id}) and purged all cloud database records.`
-      };
-
-      const existingAudit = this.read<any>('bos_feature_audit_logs');
-      this.write('bos_feature_audit_logs', [auditLog, ...existingAudit]);
-      const existingLogs = this.read<any>('bos_logs');
-      this.write('bos_logs', [auditLog, ...existingLogs]);
-
+      const jsonStr = JSON.stringify(items);
+      localStorage.setItem('bos_businesses', jsonStr);
+      localStorage.setItem('cloud_bos_businesses', jsonStr);
       this.notifyListeners();
-      return { success: true, message: `Business "${busName}" has been permanently deleted.` };
-    } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      console.warn('Backend deletion call note, applying local purge:', errMsg);
-
-      // Still purge local data so user isn't stuck
-      this.purgeLocalBusinessData(id);
-      this.notifyListeners();
-
-      return { success: true, message: `Business "${busName}" removed from active state.` };
+      return items;
+    } catch (err) {
+      console.error('fetchBusinessesFromFirestore error:', err);
+      return this.getBusinesses();
     }
+  }
+
+  public syncBusinessesFromFirestore(businesses: Business[]): void {
+    let deletedIds: string[] = [];
+    try {
+      const raw = localStorage.getItem('bos_deleted_business_ids');
+      if (raw) deletedIds = JSON.parse(raw) || [];
+    } catch (e) {}
+    const deletedSet = new Set(deletedIds);
+    const filtered = (Array.isArray(businesses) ? businesses : []).filter(b => b && b.id && !deletedSet.has(b.id));
+    const jsonStr = JSON.stringify(filtered);
+    localStorage.setItem('bos_businesses', jsonStr);
+    localStorage.setItem('cloud_bos_businesses', jsonStr);
+    this.notifyListeners();
   }
 
   public deleteBusiness(id: string): void {
