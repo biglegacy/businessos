@@ -1332,13 +1332,18 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
             <form onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
+              const titleStr = f.get('title') as string;
+              const contentStr = f.get('content') as string;
+              const audience = f.get('targetAudience') as any || 'parents';
+              const channel = f.get('channel') as any || 'both';
+
               const announcement: SchoolAnnouncement = {
                 id: `anc-${Date.now()}`,
                 businessId: business.id,
-                title: f.get('title') as string,
-                content: f.get('content') as string,
-                targetAudience: f.get('targetAudience') as any || 'parents',
-                channel: f.get('channel') as any || 'both',
+                title: titleStr,
+                content: contentStr,
+                targetAudience: audience,
+                channel,
                 date: new Date().toISOString().split('T')[0],
                 authorName: currentUser.name,
                 smsStatus: 'sent',
@@ -1347,9 +1352,24 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
               };
 
               db.saveSchoolAnnouncement(business.id, announcement);
+
+              // Dispatch real SMS to recipients via Arkesel
+              if (channel === 'sms' || channel === 'both') {
+                const parentPhones: string[] = Array.from(new Set(students.map(s => s.parentPhone).filter((p): p is string => !!p && String(p).trim().length >= 9)));
+                if (parentPhones.length > 0) {
+                  db.sendSms({
+                    recipient: parentPhones,
+                    message: `${business.name}: ${titleStr} - ${contentStr}`,
+                    businessId: business.id,
+                    businessName: business.name,
+                    type: 'school_broadcast'
+                  }).catch(err => console.warn('School broadcast SMS dispatch error:', err));
+                }
+              }
+
               reloadData();
               setIsNoticeModalOpen(false);
-              showToast(`Broadcast sent to ${announcement.recipientCount} recipients via ${announcement.channel}.`);
+              showToast(`Broadcast dispatched to ${announcement.recipientCount} recipients.`);
             }} className="space-y-3 text-xs">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Notice Headline *</label>

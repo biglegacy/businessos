@@ -509,6 +509,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
         recipient: targetPhone,
         message: msg,
         businessId: business.id,
+        businessName: business.name,
         type: 'receipt'
       }).then(res => {
         if (res.success) {
@@ -601,6 +602,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
         recipient: phone,
         message: msg,
         businessId: business.id,
+        businessName: business.name,
         type: 'receipt'
       });
 

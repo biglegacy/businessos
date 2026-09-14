@@ -343,6 +343,7 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
         recipient: targetPhone,
         message: msg,
         businessId: business.id,
+        businessName: business.name,
         type: 'receipt'
       });
 

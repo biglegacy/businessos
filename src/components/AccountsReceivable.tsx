@@ -150,6 +150,7 @@ export const AccountsReceivable: React.FC<AccountsReceivableProps> = ({
         recipient: reminderCustomer.phone,
         message: reminderMessage,
         businessId: business.id,
+        businessName: business.name,
         type: 'reminder'
       });
 

@@ -2843,9 +2843,9 @@ class CloudDatabase {
       if (res.ok && data.success) {
         return data;
       }
-      return { success: false, message: data.message || data.error || '✕ Failed to save Arkesel SMS settings. Please try again.' };
+      return { success: false, message: data.message || data.error || 'Failed to save Arkesel API settings. Please try again.' };
     } catch (err: any) {
-      return { success: false, message: '✕ Failed to save Arkesel SMS settings. Please try again.' };
+      return { success: false, message: 'Failed to save Arkesel API settings. Please try again.' };
     }
   }
 
@@ -2866,7 +2866,7 @@ class CloudDatabase {
     } catch (err: any) {
       return {
         success: false,
-        message: '✕ Arkesel connection failed. Please check your API key and configuration.',
+        message: 'Arkesel connection failed: Network error. Please check your connection.',
         error: err.message
       };
     }
@@ -2927,6 +2927,7 @@ class CloudDatabase {
     senderId?: string;
     idempotencyKey?: string;
     businessId?: string;
+    businessName?: string;
     type?: string;
     clientTriggerTime?: number;
   }): Promise<{

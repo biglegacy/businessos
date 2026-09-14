@@ -290,6 +290,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     }
   };
 
+  // Initial load on mount to retrieve saved Arkesel configuration immediately
+  useEffect(() => {
+    loadSmsConfigAndLogs();
+  }, []);
+
   // Fetch data on tab change
   useEffect(() => {
     if (activeTab === 'sms') {
@@ -337,7 +342,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       });
 
       if (result.success) {
-        setSmsSaveMessage({ type: 'success', text: '✓ Arkesel SMS settings saved successfully.' });
+        setSmsSaveMessage({ type: 'success', text: 'Arkesel API settings saved successfully.' });
         if (result.config) {
           setSmsConfig(prev => ({ ...prev, ...result.config }));
           if (result.config.maskedApiKey) {
@@ -346,10 +351,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         }
         await loadSmsConfigAndLogs();
       } else {
-        setSmsSaveMessage({ type: 'error', text: '✕ Failed to save Arkesel SMS settings. Please try again.' });
+        setSmsSaveMessage({ type: 'error', text: result.message || 'Failed to save Arkesel API settings. Please try again.' });
       }
     } catch (err: any) {
-      setSmsSaveMessage({ type: 'error', text: '✕ Failed to save Arkesel SMS settings. Please try again.' });
+      setSmsSaveMessage({ type: 'error', text: 'Failed to save Arkesel API settings. Please try again.' });
     } finally {
       setSmsSaving(false);
       setTimeout(() => setSmsSaveMessage(null), 6000);
@@ -367,7 +372,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     } catch (err: any) {
       setConnectionTestResult({
         success: false,
-        message: '✕ Arkesel connection failed. Please check your API key and configuration.'
+        message: 'Arkesel connection failed. Please check your API key and configuration.'
       });
     } finally {
       setIsTestingConnection(false);
@@ -2214,9 +2219,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                             <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
                           )}
                           <span>
-                            {connectionTestResult.success 
-                              ? '✓ Arkesel connection successful.' 
-                              : '✕ Arkesel connection failed. Please check your API key and configuration.'}
+                            {connectionTestResult.message || (connectionTestResult.success 
+                              ? 'Arkesel connection successful.' 
+                              : 'Arkesel connection failed. Please check your API key and configuration.')}
                           </span>
                         </div>
                         {connectionTestResult.balance !== undefined && (
