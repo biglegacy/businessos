@@ -491,6 +491,33 @@ function logSmsActivityAsync(entry: {
   });
 }
 
+// Format registered business name into an Arkesel & telecom compliant GSM Sender ID (max 11 alphanumeric characters)
+function formatSenderIdFromBusinessName(businessName: string, fallback = 'BusinessOS'): string {
+  if (!businessName || !businessName.trim()) {
+    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 11) || 'BusinessOS';
+  }
+
+  // Sanitize: allow only alphanumeric characters and single spaces
+  const cleaned = businessName.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 11) || 'BusinessOS';
+  }
+
+  // If already <= 11 characters, preserve spaces for clean readability (e.g., "Royal Crown", "Adom Fm")
+  if (cleaned.length <= 11) {
+    return cleaned;
+  }
+
+  // If longer than 11 characters, try removing spaces to capture the full business brand (e.g. "Travel Trust" -> "TravelTrust")
+  const compact = cleaned.replace(/\s+/g, '');
+  if (compact.length <= 11) {
+    return compact;
+  }
+
+  // Cap at 11 characters strictly per telecom specifications
+  return compact.slice(0, 11);
+}
+
 // Lightweight in-memory business metadata cache to avoid disk I/O on critical SMS path
 const businessMetaCache = new Map<string, { name: string; smsEnabled: boolean; cachedAt: number }>();
 function getBusinessMetaCached(businessId: string): { name: string; smsEnabled: boolean } | null {
@@ -501,7 +528,7 @@ function getBusinessMetaCached(businessId: string): { name: string; smsEnabled: 
   try {
     const dbData = readDatabase();
     const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
-    const target = businesses.find((b: any) => b && b.id === businessId);
+    const target = businesses.find((b: any) => b && (b.id === businessId || b._id === businessId));
     if (target) {
       const meta = {
         name: target.name || '',
@@ -513,6 +540,29 @@ function getBusinessMetaCached(businessId: string): { name: string; smsEnabled: 
     }
   } catch {}
   return null;
+}
+
+// Helper to resolve the registered business name from any context (provided name, ID, or active registered business)
+function resolveRegisteredBusinessName(businessId?: string, businessName?: string): string {
+  if (businessName && businessName.trim()) {
+    return businessName.trim();
+  }
+  if (businessId && businessId !== 'platform') {
+    const meta = getBusinessMetaCached(businessId);
+    if (meta?.name) return meta.name;
+  }
+  try {
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    if (businessId && businessId !== 'platform') {
+      const target = businesses.find((b: any) => b && (b.id === businessId || b._id === businessId));
+      if (target?.name) return target.name;
+    }
+    // If no specific businessId or not found, resolve from any registered active business in the system
+    const activeBus = businesses.find((b: any) => b && b.name && b.smsEnabled !== false) || businesses.find((b: any) => b && b.name);
+    if (activeBus?.name) return activeBus.name;
+  } catch {}
+  return '';
 }
 
 // Reusable server-side Arkesel SMS dispatch service — optimized for sub-second, direct execution
@@ -638,33 +688,28 @@ async function dispatchArkeselSms({
   }
 
   // Verify business-level SMS status (Enforced server-side with zero disk I/O)
-  let targetBusinessName = businessName;
+  const targetBusinessName = resolveRegisteredBusinessName(businessId, businessName);
   if (businessId && businessId !== 'platform') {
     const meta = getBusinessMetaCached(businessId);
-    if (meta) {
-      if (meta.smsEnabled === false) {
-        const completionTime = Date.now();
-        const disabledMsg = 'SMS service is currently disabled by the Super Admin for this business.';
-        console.warn(`[Arkesel SMS Blocked] Business ${businessId} has SMS disabled by Super Admin.`);
-        return {
-          success: false,
-          status: 'Failed',
-          message: disabledMsg,
-          recipient: cleanedRecipients.join(', '),
-          timings: {
-            clientTriggerTime,
-            backendReceivedTime,
-            arkeselRequestStartTime: backendReceivedTime,
-            arkeselResponseTime: completionTime,
-            submissionCompletionTime: completionTime,
-            arkeselLatencyMs: 0,
-            totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
-          }
-        };
-      }
-      if (!targetBusinessName && meta.name) {
-        targetBusinessName = meta.name;
-      }
+    if (meta && meta.smsEnabled === false) {
+      const completionTime = Date.now();
+      const disabledMsg = 'SMS service is currently disabled by the Super Admin for this business.';
+      console.warn(`[Arkesel SMS Blocked] Business ${businessId} has SMS disabled by Super Admin.`);
+      return {
+        success: false,
+        status: 'Failed',
+        message: disabledMsg,
+        recipient: cleanedRecipients.join(', '),
+        timings: {
+          clientTriggerTime,
+          backendReceivedTime,
+          arkeselRequestStartTime: backendReceivedTime,
+          arkeselResponseTime: completionTime,
+          submissionCompletionTime: completionTime,
+          arkeselLatencyMs: 0,
+          totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        }
+      };
     }
   }
 
@@ -692,15 +737,21 @@ async function dispatchArkeselSms({
 
   const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
 
-  // Determine dynamic sender ID from registered business name (Requirement 13)
-  let resolvedSender = senderId;
-  if (!resolvedSender && targetBusinessName) {
-    const cleaned = targetBusinessName.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-    if (cleaned.length > 0) {
-      resolvedSender = cleaned.slice(0, 11);
+  // Determine dynamic sender ID: ALWAYS let the sender's name be the name of the registered business!
+  let effectiveSender = '';
+  if (targetBusinessName && targetBusinessName.trim()) {
+    effectiveSender = formatSenderIdFromBusinessName(targetBusinessName, config.senderId);
+  } else if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
+    effectiveSender = formatSenderIdFromBusinessName(senderId, config.senderId);
+  } else {
+    // If no specific business name was provided, resolve from any registered active business in the system
+    const anyBusName = resolveRegisteredBusinessName();
+    if (anyBusName) {
+      effectiveSender = formatSenderIdFromBusinessName(anyBusName, config.senderId);
+    } else {
+      effectiveSender = formatSenderIdFromBusinessName(config.senderId || 'BusinessOS');
     }
   }
-  const effectiveSender = (resolvedSender || config.senderId || 'BusinessOS').slice(0, 11);
 
   const payload = {
     sender: effectiveSender,
@@ -1362,7 +1413,7 @@ app.post('/api/admin/sms/test-connection', async (req, res) => {
 // API 3.8: Send Test SMS via real Arkesel API (Uses saved credentials)
 app.post('/api/admin/sms/test', async (req, res) => {
   try {
-    const { phoneNumber, message, clientTriggerTime } = req.body;
+    const { phoneNumber, message, clientTriggerTime, businessId, businessName } = req.body;
 
     if (!phoneNumber || !String(phoneNumber).trim()) {
       return res.status(400).json({
@@ -1372,14 +1423,16 @@ app.post('/api/admin/sms/test', async (req, res) => {
       });
     }
 
+    const regName = resolveRegisteredBusinessName(businessId, businessName);
     const testMessage = (message && String(message).trim())
       ? String(message).trim()
-      : 'BusinessOS SMS configuration test successful.';
+      : `${regName || 'BusinessOS'}: SMS configuration test successful.`;
 
     const result = await dispatchArkeselSms({
       recipients: [phoneNumber],
       message: testMessage,
-      businessId: 'platform',
+      businessId: businessId || 'platform',
+      businessName: regName,
       type: 'test_sms',
       clientTriggerTime: Number(clientTriggerTime) || undefined
     });

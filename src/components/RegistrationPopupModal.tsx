@@ -77,11 +77,15 @@ export function RegistrationPopupModal({ business, onNavigateTab }: Registration
 
   const handleDismiss = () => {
     if (activePrompt) {
-      if (activePrompt.allowRepeatDisplay) {
-        sessionStorage.setItem(`bos_popup_dismissed_session_${activePrompt.id}`, 'true');
-      } else {
-        localStorage.setItem(`bos_popup_dismissed_perm_${activePrompt.id}`, 'true');
-        sessionStorage.setItem(`bos_popup_dismissed_session_${activePrompt.id}`, 'true');
+      try {
+        if (activePrompt.allowRepeatDisplay) {
+          sessionStorage.setItem(`bos_popup_dismissed_session_${activePrompt.id}`, 'true');
+        } else {
+          localStorage.setItem(`bos_popup_dismissed_perm_${activePrompt.id}`, 'true');
+          sessionStorage.setItem(`bos_popup_dismissed_session_${activePrompt.id}`, 'true');
+        }
+      } catch (e) {
+        // Safe fallback if storage quota exceeded
       }
     }
     setIsVisible(false);

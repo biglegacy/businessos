@@ -187,6 +187,7 @@ export default function App() {
         recipient: phone,
         message: msg,
         businessId: activeBusiness?.id || sale.businessId,
+        businessName: activeBusiness?.name,
         type: 'receipt'
       });
 
@@ -2788,7 +2789,9 @@ export default function App() {
           onPayNow={handleExecutePayNowPayment}
           onLater={() => {
             if (activeBusiness) {
-              sessionStorage.setItem(`bos_sub_popup_dismissed_${activeBusiness.id}`, 'true');
+              try {
+                sessionStorage.setItem(`bos_sub_popup_dismissed_${activeBusiness.id}`, 'true');
+              } catch (e) {}
               setSubDismissedBusId(activeBusiness.id);
             }
             const updatedNotif = {

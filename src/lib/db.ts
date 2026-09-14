@@ -33,11 +33,114 @@ export const ALL_DB_KEYS = [
   'bos_deleted_business_ids', 'bos_pricing_plans'
 ];
 
+// In-memory storage fallback if localStorage quota is exceeded or unavailable
+const memoryStorage = new Map<string, string>();
+
+// Clean up redundant or oversized storage items to maintain quota
+export function cleanUpStorageQuota(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    // 1. Remove all legacy 'cloud_' prefixed keys which unnecessarily duplicate all collections
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('cloud_') || k.startsWith('temp_'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach(k => {
+      try { localStorage.removeItem(k); } catch (e) {}
+    });
+
+    // 2. Prune oversized local activity & notification logs to latest 50 entries
+    const logTables = ['bos_logs', 'bos_feature_audit_logs', 'bos_notification_logs', 'bos_pending_sync'];
+    logTables.forEach(k => {
+      try {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 50) {
+            localStorage.setItem(k, JSON.stringify(parsed.slice(-50)));
+          }
+        }
+      } catch (e) {}
+    });
+  } catch (e) {}
+}
+
+// Immediately clean up legacy redundant keys
+cleanUpStorageQuota();
+
+export function safeStorageSetItem(key: string, value: string): boolean {
+  if (typeof window === 'undefined') {
+    memoryStorage.set(key, value);
+    return true;
+  }
+  try {
+    localStorage.setItem(key, value);
+    memoryStorage.set(key, value);
+    return true;
+  } catch (e: any) {
+    const isQuota = e?.name === 'QuotaExceededError' || 
+                    e?.code === 22 || 
+                    e?.number === -2147024882 ||
+                    (typeof e?.message === 'string' && e.message.toLowerCase().includes('quota'));
+
+    if (isQuota) {
+      console.warn(`[Storage] QuotaExceededError for key "${key}". Running aggressive cache purge...`);
+      cleanUpStorageQuota();
+      try {
+        localStorage.setItem(key, value);
+        memoryStorage.set(key, value);
+        return true;
+      } catch (retryErr) {
+        console.warn(`[Storage] Quota still exceeded for "${key}". Storing in fallback cache.`);
+      }
+    }
+
+    // Retain in memory and try sessionStorage fallback
+    memoryStorage.set(key, value);
+    try {
+      sessionStorage.setItem(key, value);
+    } catch (sErr) {}
+    return false;
+  }
+}
+
+export function safeStorageGetItem(key: string): string | null {
+  if (typeof window === 'undefined') {
+    return memoryStorage.get(key) || null;
+  }
+  try {
+    const item = localStorage.getItem(key);
+    if (item !== null) return item;
+  } catch (e) {}
+  try {
+    const sItem = sessionStorage.getItem(key);
+    if (sItem !== null) return sItem;
+  } catch (e) {}
+  return memoryStorage.get(key) || null;
+}
+
+export function safeStorageRemoveItem(key: string): void {
+  if (typeof window === 'undefined') {
+    memoryStorage.delete(key);
+    return;
+  }
+  try {
+    localStorage.removeItem(key);
+  } catch (e) {}
+  try {
+    sessionStorage.removeItem(key);
+  } catch (e) {}
+  memoryStorage.delete(key);
+}
+
 // Smart record merging helper across devices and updates
 function mergeRecordArrays(localItems: any[], cloudItems: any[], collectionKey?: string): any[] {
   let deletedBusinessIds: string[] = [];
   try {
-    const raw = localStorage.getItem('bos_deleted_business_ids');
+    const raw = safeStorageGetItem('bos_deleted_business_ids');
     if (raw) deletedBusinessIds = JSON.parse(raw) || [];
   } catch (e) {}
 
@@ -47,9 +150,7 @@ function mergeRecordArrays(localItems: any[], cloudItems: any[], collectionKey?:
       return item?.id || item?.businessId;
     }).filter(Boolean);
     const combined = Array.from(new Set([...deletedBusinessIds, ...cloudIds]));
-    try {
-      localStorage.setItem('bos_deleted_business_ids', JSON.stringify(combined));
-    } catch (e) {}
+    safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(combined));
     return combined.map(id => ({ id, businessId: id, deletedAt: new Date().toISOString() }));
   }
 
@@ -216,12 +317,11 @@ class CloudDatabase {
           const localItems = this.read<any>(key);
           const merged = mergeRecordArrays(localItems, cloudItems, key);
           const mergedStr = JSON.stringify(merged);
-          const localValStr = localStorage.getItem(key) || '[]';
+          const localValStr = safeStorageGetItem(key) || '[]';
 
           if (localValStr !== mergedStr) {
-            localStorage.setItem(key, mergedStr);
-            localStorage.setItem('cloud_' + key, mergedStr);
-            localStorage.setItem('bos_last_sync_time', new Date().toISOString());
+            safeStorageSetItem(key, mergedStr);
+            safeStorageSetItem('bos_last_sync_time', new Date().toISOString());
             this.notifyListeners();
           }
         }, (err) => {
@@ -235,24 +335,21 @@ class CloudDatabase {
   }
 
   private init() {
+    cleanUpStorageQuota();
     ALL_DB_KEYS.forEach(k => {
-      if (!localStorage.getItem(k)) {
-        localStorage.setItem(k, JSON.stringify([]));
-      }
-      const cloudKey = 'cloud_' + k;
-      if (!localStorage.getItem(cloudKey)) {
-        localStorage.setItem(cloudKey, localStorage.getItem(k) || '[]');
+      if (!safeStorageGetItem(k)) {
+        safeStorageSetItem(k, JSON.stringify([]));
       }
     });
-    if (!localStorage.getItem('bos_pending_sync')) {
-      localStorage.setItem('bos_pending_sync', JSON.stringify([]));
+    if (!safeStorageGetItem('bos_pending_sync')) {
+      safeStorageSetItem('bos_pending_sync', JSON.stringify([]));
     }
-    if (!localStorage.getItem('bos_last_sync_time')) {
-      localStorage.setItem('bos_last_sync_time', new Date().toISOString());
+    if (!safeStorageGetItem('bos_last_sync_time')) {
+      safeStorageSetItem('bos_last_sync_time', new Date().toISOString());
     }
 
     // Initialize Global Features
-    const storedFeatures = localStorage.getItem('bos_global_features');
+    const storedFeatures = safeStorageGetItem('bos_global_features');
     if (!storedFeatures || JSON.parse(storedFeatures).length === 0) {
       const defaultFeatures: GlobalFeature[] = [
         {
@@ -376,21 +473,20 @@ class CloudDatabase {
           changedBy: 'system'
         }
       ];
-      localStorage.setItem('bos_global_features', JSON.stringify(defaultFeatures));
-      localStorage.setItem('cloud_bos_global_features', JSON.stringify(defaultFeatures));
+      safeStorageSetItem('bos_global_features', JSON.stringify(defaultFeatures));
     }
   }
 
   // Purely private reader/writer with parsing error tolerance
   private read<T>(key: string): T[] {
     try {
-      const data = localStorage.getItem(key);
+      const data = safeStorageGetItem(key);
       let items: T[] = data ? JSON.parse(data) : [];
 
       if (key !== 'bos_deleted_business_ids' && Array.isArray(items) && items.length > 0) {
         let deletedIds: string[] = [];
         try {
-          const raw = localStorage.getItem('bos_deleted_business_ids');
+          const raw = safeStorageGetItem('bos_deleted_business_ids');
           if (raw) deletedIds = JSON.parse(raw) || [];
         } catch (e) {}
 
@@ -412,8 +508,7 @@ class CloudDatabase {
   }
 
   private write<T>(key: string, data: T[]): void {
-    // Capture previous items BEFORE updating local storage so deleted document IDs are correctly detected
-    const previousCloud = this.read<any>('cloud_' + key);
+    const previousItems = this.read<any>(key);
 
     // Inject updatedAt timestamp for records that do not have one
     const updatedData = data.map((item: any) => {
@@ -424,16 +519,15 @@ class CloudDatabase {
     });
 
     const updatedJson = JSON.stringify(updatedData);
-    localStorage.setItem(key, updatedJson);
-    localStorage.setItem('cloud_' + key, updatedJson);
-    localStorage.setItem('bos_last_sync_time', new Date().toISOString());
+    safeStorageSetItem(key, updatedJson);
+    safeStorageSetItem('bos_last_sync_time', new Date().toISOString());
 
     // Write directly to Cloud Firestore in real time
     try {
       const newIds = new Set(updatedData.map((i: any) => i.id).filter(Boolean));
 
       // Remove deleted documents from Firestore
-      (Array.isArray(previousCloud) ? previousCloud : []).forEach((oldItem: any) => {
+      (Array.isArray(previousItems) ? previousItems : []).forEach((oldItem: any) => {
         if (oldItem && oldItem.id && !newIds.has(oldItem.id)) {
           deleteDoc(doc(firestore, key, String(oldItem.id))).catch(err => {
             console.warn(`Firestore delete document error for ${key}/${oldItem.id}:`, err);
@@ -443,7 +537,7 @@ class CloudDatabase {
 
       let deletedIds: string[] = [];
       try {
-        const raw = localStorage.getItem('bos_deleted_business_ids');
+        const raw = safeStorageGetItem('bos_deleted_business_ids');
         if (raw) deletedIds = JSON.parse(raw) || [];
       } catch (e) {}
       const deletedSet = new Set(deletedIds);
@@ -509,11 +603,11 @@ class CloudDatabase {
       if (Array.isArray(cloudData['bos_deleted_business_ids'])) {
         let localDeleted: string[] = [];
         try {
-          const raw = localStorage.getItem('bos_deleted_business_ids');
+          const raw = safeStorageGetItem('bos_deleted_business_ids');
           if (raw) localDeleted = JSON.parse(raw) || [];
         } catch (e) {}
         const mergedDeleted = Array.from(new Set([...localDeleted, ...cloudData['bos_deleted_business_ids']]));
-        localStorage.setItem('bos_deleted_business_ids', JSON.stringify(mergedDeleted));
+        safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(mergedDeleted));
       }
 
       let hasChanges = false;
@@ -525,18 +619,17 @@ class CloudDatabase {
           const localItems = this.read<any>(k);
           const merged = mergeRecordArrays(localItems, cloudItems, k);
           const mergedStr = JSON.stringify(merged);
-          const localValStr = localStorage.getItem(k) || '[]';
+          const localValStr = safeStorageGetItem(k) || '[]';
 
           if (localValStr !== mergedStr) {
-            localStorage.setItem(k, mergedStr);
-            localStorage.setItem('cloud_' + k, mergedStr);
+            safeStorageSetItem(k, mergedStr);
             hasChanges = true;
           }
         }
       });
 
       if (hasChanges) {
-        localStorage.setItem('bos_last_sync_time', new Date().toISOString());
+        safeStorageSetItem('bos_last_sync_time', new Date().toISOString());
         this.notifyListeners();
       }
     } catch (e) {
@@ -577,7 +670,7 @@ class CloudDatabase {
 
   public getPendingQueue(): any[] {
     try {
-      const data = localStorage.getItem('bos_pending_sync');
+      const data = safeStorageGetItem('bos_pending_sync');
       return data ? JSON.parse(data) : [];
     } catch {
       return [];
@@ -589,7 +682,7 @@ class CloudDatabase {
   }
 
   public getLastSyncTime(): string {
-    const t = localStorage.getItem('bos_last_sync_time');
+    const t = safeStorageGetItem('bos_last_sync_time');
     if (!t) return 'Never';
     return new Date(t).toLocaleString();
   }
@@ -611,42 +704,14 @@ class CloudDatabase {
     let syncedCount = 0;
 
     tablesToSync.forEach(table => {
-      const cloudKey = 'cloud_' + table;
       const localList = this.read<any>(table);
-      const cloudList = this.read<any>(cloudKey);
-
-      // Perform a complete two-way merge by comparing updatedAt timestamps
-      const mergedMap = new Map<string, any>();
-      cloudList.forEach((item: any) => {
-        if (item && item.id) mergedMap.set(item.id, item);
-      });
-
-      localList.forEach((item: any) => {
-        if (item && item.id) {
-          const existing = mergedMap.get(item.id);
-          if (!existing) {
-            mergedMap.set(item.id, item);
-          } else {
-            const timeExisting = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-            const timeLocal = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-            if (timeLocal >= timeExisting) {
-              mergedMap.set(item.id, item);
-            }
-          }
-        }
-      });
-
-      const mergedList = Array.from(mergedMap.values());
-      
-      // Save the merged data back to both local and cloud
-      localStorage.setItem(table, JSON.stringify(mergedList));
-      localStorage.setItem(cloudKey, JSON.stringify(mergedList));
+      safeStorageSetItem(table, JSON.stringify(localList));
       syncedCount++;
     });
 
     // Clear the pending queue
-    localStorage.setItem('bos_pending_sync', JSON.stringify([]));
-    localStorage.setItem('bos_last_sync_time', new Date().toISOString());
+    safeStorageSetItem('bos_pending_sync', JSON.stringify([]));
+    safeStorageSetItem('bos_last_sync_time', new Date().toISOString());
 
     // Add activity log
     if (businessId) {
@@ -666,7 +731,7 @@ class CloudDatabase {
     const list = this.read<Business>('bos_businesses');
     let deletedIds: string[] = [];
     try {
-      const raw = localStorage.getItem('bos_deleted_business_ids');
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
       if (raw) deletedIds = JSON.parse(raw) || [];
     } catch (e) {}
     const deletedSet = new Set(deletedIds);
@@ -799,17 +864,17 @@ class CloudDatabase {
   }
 
   public purgeLocalBusinessData(id: string): void {
-    // Record tombstone in localStorage and sessionStorage
+    // Record tombstone in safe storage and sessionStorage
     let deletedIds: string[] = [];
     try {
-      const raw = localStorage.getItem('bos_deleted_business_ids');
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
       if (raw) deletedIds = JSON.parse(raw) || [];
     } catch (e) {}
 
     if (!deletedIds.includes(id)) {
       deletedIds.push(id);
+      safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
       try {
-        localStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
         sessionStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
       } catch (e) {}
     }
@@ -820,7 +885,6 @@ class CloudDatabase {
         const rawBusinesses = this.read<Business>('bos_businesses');
         const filtered = rawBusinesses.filter(b => b && b.id !== id);
         this.write('bos_businesses', filtered);
-        localStorage.setItem('cloud_bos_businesses', JSON.stringify(filtered));
       } else if (key !== 'bos_deleted_business_ids') {
         const items = this.read<any>(key);
         const filtered = items.filter((item: any) => {
@@ -832,7 +896,6 @@ class CloudDatabase {
           return true;
         });
         this.write(key, filtered);
-        localStorage.setItem('cloud_' + key, JSON.stringify(filtered));
       }
     });
 
@@ -1002,7 +1065,7 @@ class CloudDatabase {
       const snap = await getDocs(colRef);
       let deletedIds: string[] = [];
       try {
-        const raw = localStorage.getItem('bos_deleted_business_ids');
+        const raw = safeStorageGetItem('bos_deleted_business_ids');
         if (raw) deletedIds = JSON.parse(raw) || [];
       } catch (e) {}
       const deletedSet = new Set(deletedIds);
@@ -1015,8 +1078,7 @@ class CloudDatabase {
       });
 
       const jsonStr = JSON.stringify(items);
-      localStorage.setItem('bos_businesses', jsonStr);
-      localStorage.setItem('cloud_bos_businesses', jsonStr);
+      safeStorageSetItem('bos_businesses', jsonStr);
       this.notifyListeners();
       return items;
     } catch (err) {
@@ -1028,14 +1090,13 @@ class CloudDatabase {
   public syncBusinessesFromFirestore(businesses: Business[]): void {
     let deletedIds: string[] = [];
     try {
-      const raw = localStorage.getItem('bos_deleted_business_ids');
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
       if (raw) deletedIds = JSON.parse(raw) || [];
     } catch (e) {}
     const deletedSet = new Set(deletedIds);
     const filtered = (Array.isArray(businesses) ? businesses : []).filter(b => b && b.id && !deletedSet.has(b.id));
     const jsonStr = JSON.stringify(filtered);
-    localStorage.setItem('bos_businesses', jsonStr);
-    localStorage.setItem('cloud_bos_businesses', jsonStr);
+    safeStorageSetItem('bos_businesses', jsonStr);
     this.notifyListeners();
   }
 
@@ -1279,7 +1340,7 @@ class CloudDatabase {
       createdAt: new Date().toISOString()
     };
     list.unshift(newLog); // new logs first
-    this.write('bos_logs', list);
+    this.write('bos_logs', list.slice(0, 100));
   }
 
   // --- BRANCH OPERATIONS (Multi-Tenant Isolated) ---
@@ -2889,7 +2950,13 @@ class CloudDatabase {
     }
   }
 
-  public async sendTestSms(phoneNumber: string, message?: string, clientTriggerTime?: number): Promise<{
+  public async sendTestSms(
+    phoneNumber: string, 
+    message?: string, 
+    clientTriggerTime?: number, 
+    businessId?: string, 
+    businessName?: string
+  ): Promise<{
     success: boolean;
     status: string;
     message: string;
@@ -2898,11 +2965,39 @@ class CloudDatabase {
     timings?: SmsTimingDetails;
   }> {
     const triggerTime = clientTriggerTime || Date.now();
+
+    let resolvedBusinessName = businessName;
+    let resolvedBusinessId = businessId;
+
+    if (!resolvedBusinessName) {
+      try {
+        const businesses = this.getBusinesses();
+        if (resolvedBusinessId) {
+          const matched = businesses.find(b => b.id === resolvedBusinessId);
+          if (matched?.name) resolvedBusinessName = matched.name;
+        }
+        if (!resolvedBusinessName) {
+          const activeId = safeStorageGetItem('bos_active_business_id');
+          const activeBus = businesses.find(b => b.id === activeId) || businesses[0];
+          if (activeBus) {
+            resolvedBusinessId = resolvedBusinessId || activeBus.id;
+            resolvedBusinessName = activeBus.name;
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
       const res = await fetch('/api/admin/sms/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber, message, clientTriggerTime: triggerTime })
+        body: JSON.stringify({ 
+          phoneNumber, 
+          message, 
+          clientTriggerTime: triggerTime,
+          businessId: resolvedBusinessId,
+          businessName: resolvedBusinessName
+        })
       });
       const data = await res.json();
       return data;
@@ -2939,11 +3034,39 @@ class CloudDatabase {
     timings?: SmsTimingDetails;
   }> {
     const triggerTime = payload.clientTriggerTime || Date.now();
+
+    // Ensure sender's name is always the registered business name
+    let resolvedBusinessName = payload.businessName;
+    let resolvedBusinessId = payload.businessId;
+
+    if (!resolvedBusinessName) {
+      try {
+        const businesses = this.getBusinesses();
+        if (resolvedBusinessId) {
+          const matched = businesses.find(b => b.id === resolvedBusinessId);
+          if (matched?.name) resolvedBusinessName = matched.name;
+        }
+        if (!resolvedBusinessName) {
+          const activeId = safeStorageGetItem('bos_active_business_id');
+          const activeBus = businesses.find(b => b.id === activeId) || businesses[0];
+          if (activeBus) {
+            resolvedBusinessId = resolvedBusinessId || activeBus.id;
+            resolvedBusinessName = activeBus.name;
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
       const res = await fetch('/api/sms/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, clientTriggerTime: triggerTime })
+        body: JSON.stringify({ 
+          ...payload, 
+          businessId: resolvedBusinessId,
+          businessName: resolvedBusinessName,
+          clientTriggerTime: triggerTime 
+        })
       });
       const data = await res.json();
       return data;

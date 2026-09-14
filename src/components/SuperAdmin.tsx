@@ -13,7 +13,8 @@ import {
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
   MessageSquare, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
-  Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch
+  Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch,
+  LayoutGrid, Table as TableIcon
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -98,6 +99,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   // Test SMS & Connection States
   const [testPhoneNumber, setTestPhoneNumber] = useState('');
   const [testSmsMessage, setTestSmsMessage] = useState('BusinessOS SMS configuration test successful.');
+  const [testSmsBusinessId, setTestSmsBusinessId] = useState('');
   const [isSendingTestSms, setIsSendingTestSms] = useState(false);
   const [testSmsResult, setTestSmsResult] = useState<{
     status: string;
@@ -408,9 +410,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setIsSendingTestSms(true);
     setTestSmsResult(null);
 
+    const targetBus = businesses.find(b => b.id === testSmsBusinessId) || businesses[0];
     const clientTriggerTime = Date.now();
     try {
-      const res = await db.sendTestSms(testPhoneNumber.trim(), testSmsMessage.trim(), clientTriggerTime);
+      const res = await db.sendTestSms(
+        testPhoneNumber.trim(), 
+        testSmsMessage.trim(), 
+        clientTriggerTime,
+        targetBus?.id,
+        targetBus?.name
+      );
       setTestSmsResult(res);
       // Refresh configuration and logs
       const updatedConfig = await db.getSmsSettings();
@@ -2086,7 +2095,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     {/* Sender ID */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
-                        Sender ID <span className="text-rose-500">*</span>
+                        Default System Sender ID <span className="text-rose-500">*</span>
                       </label>
                       <input
                         type="text"
@@ -2097,8 +2106,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         placeholder="BusinessOS"
                         className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-sm uppercase focus:ring-2 focus:ring-emerald-500 outline-none transition"
                       />
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Up to 11 characters (letters, numbers). Must be an approved Sender ID in your Arkesel account.
+                      <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                        <span className="font-semibold text-emerald-700">Dynamic Sender Name:</span> When SMS are sent, the sender name is dynamically set to the registered business name (e.g. POS receipts, invoices, pharmacy, school notices). This input serves as the system default fallback.
                       </p>
                     </div>
 
@@ -2247,6 +2256,43 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     </div>
 
                     <form onSubmit={handleSendTestSms} className="space-y-4 text-xs">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Sender Name (Registered Business)
+                        </label>
+                        {businesses.length > 0 ? (
+                          <select
+                            id="select-test-sms-business"
+                            value={testSmsBusinessId || businesses[0]?.id || ''}
+                            onChange={(e) => {
+                              const chosenId = e.target.value;
+                              setTestSmsBusinessId(chosenId);
+                              const b = businesses.find(x => x.id === chosenId);
+                              if (b) {
+                                setTestSmsMessage(`${b.name}: SMS configuration test successful.`);
+                              }
+                            }}
+                            className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500 outline-none transition bg-white cursor-pointer"
+                          >
+                            {businesses.map((b) => {
+                              const previewId = b.name.length <= 11 ? b.name : b.name.replace(/\s+/g, '').slice(0, 11);
+                              return (
+                                <option key={b.id} value={b.id}>
+                                  {b.name} (Sender ID: {previewId})
+                                </option>
+                              );
+                            })}
+                          </select>
+                        ) : (
+                          <div className="px-3.5 py-2 bg-slate-100 rounded-xl text-slate-600 text-xs">
+                            No businesses registered yet. Using system default ({smsSenderIdInput || 'BusinessOS'}).
+                          </div>
+                        )}
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          The SMS recipient will see this registered business name as the message Sender.
+                        </p>
+                      </div>
+
                       <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                           Test Phone Number <span className="text-rose-500">*</span>
