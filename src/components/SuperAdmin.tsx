@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../lib/db';
 import { firestore, doc, getDoc, deleteDoc } from '../lib/firebase';
 import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES, BusinessPopupPrompt, SmsTimingDetails } from '../types';
@@ -14,7 +14,7 @@ import {
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
   MessageSquare, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
   Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch,
-  LayoutGrid, Table as TableIcon
+  LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -36,6 +36,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [bizCategoryFilter, setBizCategoryFilter] = useState<'all' | 'school' | 'other'>('all');
+  const [bizViewMode, setBizViewMode] = useState<'cards' | 'table'>('cards');
   
   // Reload trigger
   const [trigger, setTrigger] = useState(0);
@@ -455,6 +456,26 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [isDeletingInProgress, setIsDeletingInProgress] = useState<boolean>(false);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
   const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
+  const deleteModalScrollRef = useRef<HTMLDivElement>(null);
+  const [deleteModalAtBottom, setDeleteModalAtBottom] = useState<boolean>(false);
+
+  const handleScrollDeleteModal = () => {
+    if (!deleteModalScrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = deleteModalScrollRef.current;
+    setDeleteModalAtBottom(scrollTop + clientHeight >= scrollHeight - 30);
+  };
+
+  const toggleDeleteModalScroll = () => {
+    if (!deleteModalScrollRef.current) return;
+    if (deleteModalAtBottom) {
+      deleteModalScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      deleteModalScrollRef.current.scrollTo({ 
+        top: deleteModalScrollRef.current.scrollHeight, 
+        behavior: 'smooth' 
+      });
+    }
+  };
 
   // --- User Filter States ---
   const [userRoleFilter, setUserRoleFilter] = useState<string>('all');
@@ -791,6 +812,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     if (!bus) return;
     setDeleteErrorMessage(null);
     setDeleteConfirmInput('');
+    setDeleteModalAtBottom(false);
     setDeletingBusinessTarget(bus);
   };
 
@@ -1192,7 +1214,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   );
 
   return (
-    <div id="superadmin-root" className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans">
+    <div id="superadmin-root" className="min-h-screen lg:h-screen bg-slate-50 flex flex-col lg:flex-row font-sans lg:overflow-hidden">
       {/* Mobile Drawer Overlay */}
       {isMobileNavOpen && (
         <div 
@@ -1209,12 +1231,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       </aside>
 
       {/* Desktop Persistent Sidebar */}
-      <aside className="hidden lg:flex w-64 bg-slate-900 text-slate-300 flex-col shrink-0 min-h-screen">
+      <aside className="hidden lg:flex w-64 bg-slate-900 text-slate-300 flex-col shrink-0 lg:h-full">
         {superAdminNavContent}
       </aside>
 
       {/* Main Panel */}
-      <main className="flex-1 flex flex-col min-w-0">
+      <main className="flex-1 flex flex-col min-w-0 lg:h-full lg:overflow-hidden">
         {/* Mobile Header Bar */}
         <header className="lg:hidden bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-md shrink-0 sticky top-0 z-30">
           <div className="flex items-center gap-2.5">
@@ -1290,7 +1312,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         </header>
 
         {/* Contents Wrapper */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <div id="superadmin-scroll-container" className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           {/* Deletion Success Toast Banner */}
           {deleteSuccessMessage && (
             <div className="mb-6 p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between text-emerald-900 font-bold shadow-sm animate-fade-in">
@@ -1385,6 +1407,30 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* View Mode Switcher: Cards vs Table */}
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setBizViewMode('cards')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[36px] ${
+                        bizViewMode === 'cards' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="Card Layout View"
+                    >
+                      <LayoutGrid className="h-3.5 w-3.5" /> Cards
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBizViewMode('table')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[36px] ${
+                        bizViewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="Table Layout View"
+                    >
+                      <TableIcon className="h-3.5 w-3.5" /> Table
+                    </button>
+                  </div>
+
                   <button
                     onClick={handleOpenRegisterBusiness}
                     className="w-full sm:w-auto px-4 py-2.5 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition min-h-[44px]"
@@ -1394,391 +1440,416 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
               </div>
 
-              {/* Mobile Phone Cards (Visible on screens < lg) */}
-              <div className="block lg:hidden space-y-4">
-                {filteredBusinesses.map(bus => {
-                  const details = getBusinessDetails(bus);
+              {/* CARDS VIEW: Responsive across all screen sizes (Desktop, Tablet, Mobile) */}
+              {bizViewMode === 'cards' && (
+                <div className="space-y-4">
+                  {filteredBusinesses.map(bus => {
+                    const details = getBusinessDetails(bus);
 
-                  return (
-                    <div key={bus.id} className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-                      {/* Card Header: Identity & Status */}
-                      <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-                        <div className="flex items-center gap-3">
-                          <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 shadow-sm ${
-                            details.isSchool ? 'bg-indigo-600 shadow-indigo-100' : 'bg-emerald-600 shadow-emerald-100'
-                          }`}>
-                            {details.isSchool ? <GraduationCap className="h-5 w-5" /> : bus.name.charAt(0)}
-                          </div>
-                          <div>
-                            <h4 className="font-extrabold text-slate-900 text-base leading-tight">{bus.name}</h4>
-                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                              <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
-                                ID: {bus.id}
-                              </span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                                details.isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
-                              }`}>
-                                {bus.category || bus.businessType || 'General'}
-                              </span>
+                    return (
+                      <div 
+                        key={bus.id} 
+                        id={`business-card-${bus.id}`}
+                        className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4 transition hover:border-slate-300"
+                      >
+                        {/* Card Header: Identity & Status */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                          <div className="flex items-center gap-3">
+                            <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 shadow-sm ${
+                              details.isSchool ? 'bg-indigo-600 shadow-indigo-100' : 'bg-emerald-600 shadow-emerald-100'
+                            }`}>
+                              {details.isSchool ? <GraduationCap className="h-5 w-5" /> : bus.name.charAt(0)}
                             </div>
-                          </div>
-                        </div>
-
-                        {/* Account & Sub Status Badges */}
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                            bus.status === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
-                          }`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
-                            {bus.status === 'active' ? 'Active' : 'Suspended'}
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
-                            details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
-                            details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
-                            'bg-amber-100 text-amber-800'
-                          }`}>
-                            Sub: {details.subStatus}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Comprehensive Business Details Grid */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs bg-slate-50/80 p-3.5 rounded-xl border border-slate-100">
-                        {/* Owner & Contact */}
-                        <div className="space-y-1">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            {details.isSchool ? 'Principal / Head' : 'Business Owner'}
-                          </p>
-                          <p className="font-bold text-slate-800 text-sm">{bus.ownerName}</p>
-                          <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
-                            <Mail className="h-3 w-3 text-slate-400 shrink-0" />
-                            <span className="truncate">{bus.email}</span>
-                          </p>
-                          <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1">
-                            <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                            <span>{bus.phone || 'No phone recorded'}</span>
-                          </p>
-                        </div>
-
-                        {/* Subscription & Pricing */}
-                        <div className="space-y-1">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Subscription &amp; Plan</p>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-extrabold text-slate-800 text-xs">{details.planName}</span>
-                            <span className="font-black text-emerald-800 text-xs bg-emerald-100/70 px-1.5 py-0.2 rounded">
-                              {details.priceDisplay}
-                            </span>
-                          </div>
-                          <p className="text-slate-500 text-[11px]">
-                            Cycle/Expiry: <strong className="text-slate-700 font-mono">{details.formattedNextPay || 'Active'}</strong>
-                          </p>
-                          <div className="flex items-center gap-2 pt-0.5">
-                            <button
-                              onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
-                              disabled={togglingSmsBusId === bus.id}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
-                                bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                              }`}
-                              title="Toggle SMS Gateway"
-                            >
-                              SMS: {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
-                            </button>
-                            <span className="text-[10px] text-slate-400 font-mono">Currency: {bus.currency || 'GHC'}</span>
-                          </div>
-                        </div>
-
-                        {/* Scale & Activity */}
-                        <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scale &amp; Capacity</p>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-700 font-semibold">
-                            <span className="flex items-center gap-1">
-                              <GitBranch className="h-3.5 w-3.5 text-slate-400" /> {details.branchCount} {details.branchCount === 1 ? 'Branch' : 'Branches'}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Users className="h-3.5 w-3.5 text-slate-400" /> {details.staffCount} {details.staffCount === 1 ? 'Staff' : 'Staff'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Dates & Timeline */}
-                        <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timeline &amp; Activity</p>
-                          <p className="text-[11px] text-slate-600 flex items-center gap-1">
-                            <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
-                            Registered: <span className="font-semibold text-slate-700">{details.formattedRegDate}</span>
-                          </p>
-                          <p className="text-[11px] text-slate-600 flex items-center gap-1">
-                            <Clock className="h-3 w-3 text-slate-400 shrink-0" />
-                            Last Activity: <span className="font-semibold text-slate-700">{details.formattedLastAct}</span>
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Action Buttons - ALWAYS VISIBLE with clear touch targets */}
-                      <div className="space-y-2 pt-1 border-t border-slate-100">
-                        {onManageBusiness && (
-                          <button
-                            onClick={() => onManageBusiness(bus)}
-                            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition cursor-pointer min-h-[44px]"
-                          >
-                            <Building className="h-4 w-4" /> Open {details.isSchool ? 'School' : 'Business'} Dashboard
-                          </button>
-                        )}
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => setViewingBusiness(bus)}
-                            className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px]"
-                          >
-                            <Eye className="h-4 w-4 text-slate-600" /> View Details
-                          </button>
-                          <button
-                            onClick={() => handleEditBusinessClick(bus)}
-                            className="py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px]"
-                          >
-                            <Edit className="h-4 w-4" /> Edit Details
-                          </button>
-                          <button
-                            onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
-                            className={`py-2.5 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px] ${
-                              bus.status === 'active' ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                            }`}
-                          >
-                            <AlertTriangle className="h-4 w-4" /> {bus.status === 'active' ? 'Suspend' : 'Activate'}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteBusiness(bus.id)}
-                            className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-rose-200 transition cursor-pointer min-h-[44px]"
-                          >
-                            <Trash2 className="h-4 w-4" /> Delete Business
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {filteredBusinesses.length === 0 && (
-                  <div className="py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
-                    No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your filter criteria.
-                  </div>
-                )}
-              </div>
-
-              {/* Desktop Responsive Table with ALWAYS-VISIBLE Action Columns */}
-              <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[1240px]">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-[11px] uppercase tracking-wider">
-                      <th className="py-3.5 px-4">Business &amp; Identifier</th>
-                      <th className="py-3.5 px-4">Owner &amp; Contact</th>
-                      <th className="py-3.5 px-4">Category &amp; Scale</th>
-                      <th className="py-3.5 px-4">Plan &amp; Subscription</th>
-                      <th className="py-3.5 px-4">Account Status</th>
-                      <th className="py-3.5 px-4">Dates &amp; Activity</th>
-                      <th className="py-3.5 px-4 text-center min-w-[320px] bg-slate-100/70 border-l border-slate-200">Super Admin Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
-                    {filteredBusinesses.map(bus => {
-                      const details = getBusinessDetails(bus);
-
-                      return (
-                        <tr key={bus.id} className="hover:bg-slate-50/70 transition">
-                          {/* 1. Business & Unique Identifier */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="flex items-start gap-2.5">
-                              <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shrink-0 mt-0.5 shadow-xs ${
-                                details.isSchool ? 'bg-indigo-600' : 'bg-emerald-600'
-                              }`}>
-                                {details.isSchool ? <GraduationCap className="h-4 w-4" /> : bus.name.charAt(0)}
-                              </div>
-                              <div className="space-y-0.5">
-                                <p className="font-extrabold text-slate-900 text-sm leading-snug">{bus.name}</p>
-                                <span className="inline-block text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                            <div>
+                              <h4 className="font-extrabold text-slate-900 text-base leading-tight">{bus.name}</h4>
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
                                   ID: {bus.id}
                                 </span>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                                  details.isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  {bus.category || bus.businessType || 'General'}
+                                </span>
                               </div>
                             </div>
-                          </td>
+                          </div>
 
-                          {/* 2. Owner Name, Email & Phone */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="space-y-1">
-                              <p className="font-bold text-slate-800 text-xs">{bus.ownerName}</p>
-                              <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
-                                <Mail className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span className="truncate max-w-[170px]" title={bus.email}>{bus.email}</span>
-                              </p>
-                              <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1">
-                                <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span>{bus.phone || <span className="text-slate-400 italic">No phone</span>}</span>
-                              </p>
+                          {/* Account & Sub Status Badges */}
+                          <div className="flex items-center sm:flex-col sm:items-end gap-1.5 shrink-0">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                              bus.status === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                            }`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                              {bus.status === 'active' ? 'Active' : 'Suspended'}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                              details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                              details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
+                              'bg-amber-100 text-amber-800'
+                            }`}>
+                              Sub: {details.subStatus}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* VISIBLE ACTION AREA: Positioned UP right below the card header for immediate accessibility */}
+                        <div className="bg-slate-50/90 p-3 rounded-xl border border-slate-200/80">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                              Business Management Actions
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              {details.isSchool ? 'School Tenant' : 'Commercial Tenant'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                            {/* 1. Open Workspace Dashboard */}
+                            {onManageBusiness && (
+                              <button
+                                type="button"
+                                id={`btn-open-${bus.id}`}
+                                onClick={() => onManageBusiness(bus)}
+                                className="col-span-2 sm:col-span-1 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[44px]"
+                                title={`Open ${details.isSchool ? 'School' : 'Business'} Workspace Dashboard`}
+                              >
+                                <Building className="h-4 w-4 shrink-0" />
+                                <span className="truncate">Open {details.isSchool ? 'School' : 'Dashboard'}</span>
+                              </button>
+                            )}
+
+                            {/* 2. View Details */}
+                            <button
+                              type="button"
+                              id={`btn-view-${bus.id}`}
+                              onClick={() => setViewingBusiness(bus)}
+                              className="py-2.5 px-3 bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-slate-200 transition cursor-pointer min-h-[44px] shadow-2xs"
+                              title="View full business details and credentials"
+                            >
+                              <Eye className="h-4 w-4 text-slate-600 shrink-0" />
+                              <span className="truncate">View Details</span>
+                            </button>
+
+                            {/* 3. Edit Details */}
+                            <button
+                              type="button"
+                              id={`btn-edit-${bus.id}`}
+                              onClick={() => handleEditBusinessClick(bus)}
+                              className="py-2.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-indigo-200 transition cursor-pointer min-h-[44px]"
+                              title="Edit business parameters and contact information"
+                            >
+                              <Edit className="h-4 w-4 shrink-0" />
+                              <span className="truncate">Edit Details</span>
+                            </button>
+
+                            {/* 4. Suspend / Activate */}
+                            <button
+                              type="button"
+                              id={`btn-toggle-status-${bus.id}`}
+                              onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
+                              className={`py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px] border ${
+                                bus.status === 'active'
+                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                              }`}
+                              title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
+                            >
+                              <AlertTriangle className="h-4 w-4 shrink-0" />
+                              <span className="truncate">{bus.status === 'active' ? 'Suspend' : 'Activate'}</span>
+                            </button>
+
+                            {/* 5. DELETE BUSINESS BUTTON - High visibility, red styling, immediately accessible */}
+                            <button
+                              type="button"
+                              id={`btn-delete-business-${bus.id}`}
+                              onClick={() => handleDeleteBusiness(bus.id)}
+                              className="py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-rose-200 transition cursor-pointer min-h-[44px] shadow-2xs hover:border-rose-300"
+                              title={`Permanently Delete ${details.isSchool ? 'School' : 'Business'} and its records`}
+                            >
+                              <Trash2 className="h-4 w-4 text-rose-600 shrink-0" />
+                              <span className="truncate">Delete Business</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Comprehensive Business Details Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs bg-slate-50/60 p-3.5 rounded-xl border border-slate-100">
+                          {/* Owner & Contact */}
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              {details.isSchool ? 'Principal / Head' : 'Business Owner'}
+                            </p>
+                            <p className="font-bold text-slate-800 text-sm">{bus.ownerName}</p>
+                            <p className="text-slate-600 font-mono text-[11px] flex items-center gap-1">
+                              <Mail className="h-3 w-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{bus.email}</span>
+                            </p>
+                            <p className="text-slate-700 font-mono text-[11px] flex items-center gap-1">
+                              <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                              <span>{bus.phone || 'No phone recorded'}</span>
+                            </p>
+                          </div>
+
+                          {/* Subscription & Pricing */}
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Subscription &amp; Plan</p>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-slate-800 text-xs">{details.planName}</span>
+                              <span className="font-black text-emerald-800 text-xs bg-emerald-100/70 px-1.5 py-0.2 rounded">
+                                {details.priceDisplay}
+                              </span>
                             </div>
-                          </td>
+                            <p className="text-slate-500 text-[11px]">
+                              Cycle/Expiry: <strong className="text-slate-700 font-mono">{details.formattedNextPay || 'Active'}</strong>
+                            </p>
+                            <div className="flex items-center gap-2 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
+                                disabled={togglingSmsBusId === bus.id}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
+                                  bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                                }`}
+                                title="Toggle SMS Gateway"
+                              >
+                                SMS: {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
+                              </button>
+                              <span className="text-[10px] text-slate-400 font-mono">Currency: {bus.currency || 'GHC'}</span>
+                            </div>
+                          </div>
 
-                          {/* 3. Category, Branches & Staff */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="space-y-1">
-                              <span className={`inline-block px-2 py-0.5 text-[10px] rounded-md font-bold uppercase ${
+                          {/* Scale & Activity */}
+                          <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scale &amp; Capacity</p>
+                            <div className="flex items-center gap-3 text-[11px] text-slate-700 font-semibold">
+                              <span className="flex items-center gap-1">
+                                <GitBranch className="h-3.5 w-3.5 text-slate-400" /> {details.branchCount} {details.branchCount === 1 ? 'Branch' : 'Branches'}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Users className="h-3.5 w-3.5 text-slate-400" /> {details.staffCount} {details.staffCount === 1 ? 'Staff' : 'Staff'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Dates & Timeline */}
+                          <div className="space-y-1 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timeline &amp; Activity</p>
+                            <p className="text-[11px] text-slate-600 flex items-center gap-1">
+                              <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+                              Registered: <span className="font-semibold text-slate-700">{details.formattedRegDate}</span>
+                            </p>
+                            <p className="text-[11px] text-slate-600 flex items-center gap-1">
+                              <Clock className="h-3 w-3 text-slate-400 shrink-0" />
+                              Last Activity: <span className="font-semibold text-slate-700">{details.formattedLastAct}</span>
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {filteredBusinesses.length === 0 && (
+                    <div className="py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+                      No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your filter criteria.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TABLE VIEW: Responsive Table with Sticky Action Column */}
+              {bizViewMode === 'table' && (
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[1240px]">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-[11px] uppercase tracking-wider">
+                        <th className="py-3.5 px-4">Business &amp; Identifier</th>
+                        <th className="py-3.5 px-4">Owner &amp; Contact</th>
+                        <th className="py-3.5 px-4">Category &amp; Scale</th>
+                        <th className="py-3.5 px-4">Plan &amp; Subscription</th>
+                        <th className="py-3.5 px-4">Account Status</th>
+                        <th className="py-3.5 px-4">Dates &amp; Activity</th>
+                        <th className="py-3.5 px-4 text-center min-w-[360px] bg-slate-100/90 border-l border-slate-200 sticky right-0 z-10 shadow-xs">Super Admin Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
+                      {filteredBusinesses.map(bus => {
+                        const details = getBusinessDetails(bus);
+
+                        return (
+                          <tr key={bus.id} className="hover:bg-slate-50/70 transition">
+                            {/* 1. Name & ID */}
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-3">
+                                <div className={`h-9 w-9 rounded-xl flex items-center justify-center font-black text-xs text-white shrink-0 shadow-sm ${
+                                  details.isSchool ? 'bg-indigo-600' : 'bg-emerald-600'
+                                }`}>
+                                  {details.isSchool ? <GraduationCap className="h-4 w-4" /> : bus.name.charAt(0)}
+                                </div>
+                                <div>
+                                  <span className="font-extrabold text-slate-900 block text-sm">{bus.name}</span>
+                                  <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1 rounded border border-slate-200">
+                                    {bus.id}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Owner & Contact */}
+                            <td className="py-3 px-4">
+                              <span className="font-bold text-slate-800 block">{bus.ownerName}</span>
+                              <span className="text-slate-500 font-mono text-[11px] block">{bus.email}</span>
+                              <span className="text-slate-500 font-mono text-[11px] block">{bus.phone || '—'}</span>
+                            </td>
+
+                            {/* 3. Category & Scale */}
+                            <td className="py-3 px-4">
+                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
                                 details.isSchool ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-700'
                               }`}>
                                 {bus.category || bus.businessType || 'General'}
                               </span>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-600 font-medium">
-                                <span className="flex items-center gap-1" title="Number of branches">
-                                  <GitBranch className="h-3 w-3 text-slate-400" /> {details.branchCount} {details.branchCount === 1 ? 'Branch' : 'Branches'}
-                                </span>
-                                <span className="text-slate-300">&bull;</span>
-                                <span className="flex items-center gap-1" title="Registered employees and users">
-                                  <Users className="h-3 w-3 text-slate-400" /> {details.staffCount} {details.staffCount === 1 ? 'User' : 'Users'}
-                                </span>
+                              <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500 font-medium">
+                                <span>{details.branchCount} {details.branchCount === 1 ? 'branch' : 'branches'}</span>
+                                <span>•</span>
+                                <span>{details.staffCount} staff</span>
                               </div>
-                            </div>
-                          </td>
+                            </td>
 
-                          {/* 4. Plan, Subscription Price & Status */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-extrabold text-slate-800 text-xs">{details.planName}</span>
-                                <span className="font-black text-emerald-800 text-xs bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                            {/* 4. Plan & Sub */}
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-slate-800">{details.planName}</span>
+                                <span className="font-bold text-emerald-700 bg-emerald-50 px-1 rounded text-[10px]">
                                   {details.priceDisplay}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-1.5">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
-                                  details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
-                                  details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
-                                  'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {details.subStatus}
-                                </span>
-                                {details.formattedNextPay && (
-                                  <span className="text-[10px] text-slate-400 font-mono">
-                                    Next: {details.formattedNextPay}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* 5. Account Status (Active/Suspended) & SMS */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="space-y-1.5">
-                              <div>
-                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase leading-none border ${
-                                  bus.status === 'active'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-rose-50 text-rose-700 border-rose-200'
-                                }`}>
-                                  <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
-                                  {bus.status === 'active' ? 'Active' : 'Suspended'}
-                                </span>
-                              </div>
-                              <div>
+                              <div className="flex items-center gap-2 mt-1">
                                 <button
+                                  type="button"
                                   onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
                                   disabled={togglingSmsBusId === bus.id}
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase transition cursor-pointer ${
-                                    bus.smsEnabled !== false
-                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                                      : 'bg-slate-100 text-slate-500 border border-slate-300 hover:bg-slate-200'
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
+                                    bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
                                   }`}
-                                  title="Toggle SMS sending for this business"
+                                  title="Toggle SMS Gateway"
                                 >
-                                  <span className={`h-1 w-1 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                                  SMS {bus.smsEnabled !== false ? 'Active' : 'Off'}
+                                  SMS: {bus.smsEnabled !== false ? 'ON' : 'OFF'}
+                                </button>
+                                <span className="text-[10px] text-slate-400 font-mono">{bus.currency || 'GHC'}</span>
+                              </div>
+                            </td>
+
+                            {/* 5. Account Status */}
+                            <td className="py-3 px-4">
+                              <div className="space-y-1">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                  bus.status === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${bus.status === 'active' ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                                  {bus.status === 'active' ? 'Active' : 'Suspended'}
+                                </span>
+                                <div>
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                                    details.subStatus === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                                    details.subStatus === 'trial' ? 'bg-blue-100 text-blue-800' :
+                                    'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {details.subStatus}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 6. Dates & Timeline */}
+                            <td className="py-3 px-4">
+                              <div className="text-[11px] text-slate-500 space-y-0.5">
+                                <div>Reg: <span className="font-semibold text-slate-700">{details.formattedRegDate}</span></div>
+                                <div>Act: <span className="font-semibold text-slate-700">{details.formattedLastAct}</span></div>
+                              </div>
+                            </td>
+
+                            {/* 7. Super Admin Actions (Sticky Right) */}
+                            <td className="py-3 px-4 bg-slate-50/80 border-l border-slate-200 sticky right-0 z-10">
+                              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                {/* Action 1: View */}
+                                <button
+                                  type="button"
+                                  id={`table-btn-view-${bus.id}`}
+                                  onClick={() => setViewingBusiness(bus)}
+                                  className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[36px]"
+                                  title="View Full Profile & Credentials"
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-slate-500" /> View
+                                </button>
+
+                                {/* Action 2: Open Workspace */}
+                                {onManageBusiness && (
+                                  <button
+                                    type="button"
+                                    id={`table-btn-open-${bus.id}`}
+                                    onClick={() => onManageBusiness(bus)}
+                                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs min-h-[36px]"
+                                    title={`Open ${details.isSchool ? 'School' : 'Business'} Workspace Dashboard`}
+                                  >
+                                    <Building className="h-3.5 w-3.5" /> Open
+                                  </button>
+                                )}
+
+                                {/* Action 3: Edit */}
+                                <button
+                                  type="button"
+                                  id={`table-btn-edit-${bus.id}`}
+                                  onClick={() => handleEditBusinessClick(bus)}
+                                  className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[36px]"
+                                  title="Edit Business Parameters & Configuration"
+                                >
+                                  <Edit className="h-3.5 w-3.5 text-indigo-600" /> Edit
+                                </button>
+
+                                {/* Action 4: Suspend / Activate */}
+                                <button
+                                  type="button"
+                                  id={`table-btn-toggle-status-${bus.id}`}
+                                  onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer border min-h-[36px] ${
+                                    bus.status === 'active' 
+                                      ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200' 
+                                      : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                                  }`}
+                                  title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
+                                >
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  {bus.status === 'active' ? 'Suspend' : 'Activate'}
+                                </button>
+
+                                {/* Action 5: Delete Business */}
+                                <button
+                                  type="button"
+                                  id={`table-btn-delete-${bus.id}`}
+                                  onClick={() => handleDeleteBusiness(bus.id)}
+                                  className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[36px]"
+                                  title={`Permanently Delete ${details.isSchool ? 'School' : 'Business'} and its records`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-rose-600" /> Delete Business
                                 </button>
                               </div>
-                            </div>
-                          </td>
+                            </td>
+                          </tr>
+                        );
+                      })}
 
-                          {/* 6. Dates & Timeline */}
-                          <td className="py-4 px-4 align-top">
-                            <div className="space-y-1 text-slate-600">
-                              <p className="text-[11px] flex items-center gap-1">
-                                <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span className="text-slate-400">Reg:</span>
-                                <span className="font-semibold text-slate-700">{details.formattedRegDate}</span>
-                              </p>
-                              <p className="text-[11px] flex items-center gap-1">
-                                <Clock className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span className="text-slate-400">Act:</span>
-                                <span className="font-semibold text-slate-700">{details.formattedLastAct}</span>
-                              </p>
-                            </div>
-                          </td>
-
-                          {/* 7. Action Buttons (ALWAYS VISIBLE & HIGH-CONTRAST) */}
-                          <td className="py-4 px-4 align-middle text-right bg-slate-50/50 border-l border-slate-200 min-w-[320px]">
-                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                              {/* Action 1: View Details */}
-                              <button
-                                onClick={() => setViewingBusiness(bus)}
-                                className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                                title="View complete business information dossier"
-                              >
-                                <Eye className="h-3.5 w-3.5 text-slate-500" /> View
-                              </button>
-
-                              {/* Action 2: Open / Access Dashboard */}
-                              {onManageBusiness && (
-                                <button
-                                  onClick={() => onManageBusiness(bus)}
-                                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
-                                  title={`Open ${details.isSchool ? 'School' : 'Business'} Workspace Dashboard`}
-                                >
-                                  <Building className="h-3.5 w-3.5" /> Open
-                                </button>
-                              )}
-
-                              {/* Action 3: Edit */}
-                              <button
-                                onClick={() => handleEditBusinessClick(bus)}
-                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                title="Edit Business Parameters & Configuration"
-                              >
-                                <Edit className="h-3.5 w-3.5 text-indigo-600" /> Edit
-                              </button>
-
-                              {/* Action 4: Suspend / Activate */}
-                              <button
-                                onClick={() => handleToggleBusinessStatus(bus.id, bus.status)}
-                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
-                                  bus.status === 'active' 
-                                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200' 
-                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
-                                }`}
-                                title={bus.status === 'active' ? 'Suspend Business Workspace' : 'Activate Business Workspace'}
-                              >
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                                {bus.status === 'active' ? 'Suspend' : 'Activate'}
-                              </button>
-
-                              {/* Action 5: Delete */}
-                              <button
-                                onClick={() => handleDeleteBusiness(bus.id)}
-                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                title={`Permanently Delete ${details.isSchool ? 'School' : 'Business'} and its records`}
-                              >
-                                <Trash2 className="h-3.5 w-3.5 text-rose-600" /> Delete
-                              </button>
-                            </div>
+                      {filteredBusinesses.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-slate-400">
+                            No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
                           </td>
                         </tr>
-                      );
-                    })}
-
-                    {filteredBusinesses.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-400">
-                          No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -3912,94 +3983,139 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
           </div>
         </div>
       )}
-      {/* Permanent Business Deletion Confirmation Modal */}
+      {/* Permanent Business Deletion Confirmation Modal - Bounded size for mobile and PC with scroll button */}
       {deletingBusinessTarget && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 border border-slate-200 shadow-2xl relative overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
-                  <Trash2 className="h-5 w-5" />
+        <div 
+          id="delete-business-modal-overlay"
+          className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-hidden"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingInProgress) {
+              setDeletingBusinessTarget(null);
+            }
+          }}
+        >
+          <div 
+            id="delete-business-modal-card"
+            className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full max-h-[85vh] sm:max-h-[80vh] border border-slate-200 shadow-2xl relative flex flex-col overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-business-modal-title"
+          >
+            {/* Header: Fixed top with Scroll Button & Close */}
+            <div className="flex items-center justify-between px-4 py-3 sm:px-6 sm:py-3.5 border-b border-slate-100 bg-white shrink-0">
+              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl sm:rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold shrink-0">
+                  <Trash2 className="h-4 w-4 sm:h-5 sm:w-5" />
                 </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">
+                <div className="min-w-0">
+                  <h3 id="delete-business-modal-title" className="font-extrabold text-slate-900 text-sm sm:text-base truncate">
                     Delete Business?
                   </h3>
-                  <p className="text-xs text-rose-600 font-semibold">Permanent Database Deletion</p>
+                  <p className="text-[11px] text-rose-600 font-semibold truncate">Permanent Database Deletion</p>
                 </div>
               </div>
-              {!isDeletingInProgress && (
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* Scroll Button in Header */}
                 <button
-                  onClick={() => setDeletingBusinessTarget(null)}
-                  className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition cursor-pointer"
+                  type="button"
+                  id="btn-scroll-delete-modal-header"
+                  onClick={toggleDeleteModalScroll}
+                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[36px]"
+                  title={deleteModalAtBottom ? "Scroll to top of modal" : "Scroll down to confirmation input"}
                 >
-                  <X className="h-5 w-5" />
+                  {deleteModalAtBottom ? (
+                    <>
+                      <ChevronUp className="h-3.5 w-3.5 text-slate-600" />
+                      <span className="hidden xs:inline">Top</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3.5 w-3.5 text-slate-600" />
+                      <span className="hidden xs:inline">Scroll</span>
+                    </>
+                  )}
                 </button>
-              )}
+
+                {!isDeletingInProgress && (
+                  <button
+                    type="button"
+                    onClick={() => setDeletingBusinessTarget(null)}
+                    className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center"
+                    title="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Confirmation details & warning */}
-            <div className="space-y-4 mb-6">
-              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 text-xs font-bold leading-relaxed flex items-start gap-2.5">
+            {/* Scrollable Content Body with smooth scrolling */}
+            <div 
+              ref={deleteModalScrollRef}
+              onScroll={handleScrollDeleteModal}
+              className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-3.5 text-xs text-slate-700 overscroll-contain"
+            >
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 text-xs font-bold leading-relaxed flex items-start gap-2.5">
                 <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
                 <div>
                   <strong>
                     This will permanently delete the business and all of its associated data. This action cannot be undone.
                   </strong>
                   <p className="text-rose-700 font-normal mt-1">
-                    All records for &ldquo;{deletingBusinessTarget.name}&rdquo; (ID: <span className="font-mono font-bold text-rose-900">{deletingBusinessTarget.id}</span>) including products, sales, customers, employees, subcollections, and settings will be permanently erased from Firestore.
+                    All records for &ldquo;{deletingBusinessTarget.name}&rdquo; (ID: <span className="font-mono font-bold text-rose-900">{deletingBusinessTarget.id}</span>) will be permanently erased from Firestore.
                   </p>
                 </div>
               </div>
 
-              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-xs space-y-2">
-                <div className="flex justify-between">
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl text-xs space-y-2">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-500 font-medium">{deletingBusinessTarget.category === 'school' ? 'School Name:' : 'Business Name:'}</span>
-                  <span className="font-extrabold text-slate-800">{deletingBusinessTarget.name}</span>
+                  <span className="font-extrabold text-slate-800 text-right truncate">{deletingBusinessTarget.name}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-500 font-medium">Tenant ID:</span>
                   <span className="font-mono text-slate-700 text-[11px] font-bold">{deletingBusinessTarget.id}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-500 font-medium">Owner / Principal:</span>
-                  <span className="font-bold text-slate-800">{deletingBusinessTarget.ownerName} ({deletingBusinessTarget.ownerEmail || deletingBusinessTarget.email})</span>
+                  <span className="font-bold text-slate-800 text-right truncate">{deletingBusinessTarget.ownerName}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-500 font-medium">Category:</span>
                   <span className="font-semibold text-slate-700 uppercase">{deletingBusinessTarget.category || deletingBusinessTarget.type}</span>
                 </div>
               </div>
 
-              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 space-y-1">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 space-y-1">
                 <p className="font-bold text-amber-950 uppercase tracking-wider text-[10px]">
                   Data to be permanently wiped for this tenant only:
                 </p>
                 <ul className="list-disc list-inside space-y-0.5 text-amber-900 font-medium">
                   <li>Workspace configuration, settings, and branding</li>
-                  <li>All tenant users, roles, staff profiles &amp; authentication credentials</li>
+                  <li>All tenant users, roles, staff profiles &amp; credentials</li>
                   {deletingBusinessTarget.category === 'school' ? (
                     <>
-                      <li>Student profiles, teachers, classes &amp; academic timetables</li>
-                      <li>Tuition invoices, fee payments, receipts &amp; balances</li>
-                      <li>Daily attendance logs, exam grades &amp; parent announcements</li>
+                      <li>Student profiles, teachers, classes &amp; timetables</li>
+                      <li>Tuition invoices, fee payments &amp; receipts</li>
+                      <li>Daily attendance logs, exam grades &amp; reports</li>
                     </>
                   ) : (
                     <>
                       <li>All products, inventory, services &amp; stock movements</li>
-                      <li>All POS sales, invoices, receipts &amp; payment transactions</li>
-                      <li>All customers, suppliers, expenses &amp; operational logs</li>
+                      <li>All POS sales, invoices, receipts &amp; payments</li>
+                      <li>All customers, suppliers, expenses &amp; logs</li>
                     </>
                   )}
-                  <li>All Firestore documents, cloud backups, and uploaded attachments</li>
+                  <li>All Firestore documents, subcollections &amp; attachments</li>
                 </ul>
                 <p className="text-[10px] text-emerald-800 font-bold pt-1">
-                  ✓ Isolated tenant scope: Data belonging to other businesses or schools will NOT be affected.
+                  ✓ Isolated tenant scope: Other businesses or schools are NOT affected.
                 </p>
               </div>
 
-              <div className="p-3.5 bg-rose-50/50 border border-rose-200 rounded-2xl space-y-2">
+              {/* Confirmation Input Field Section */}
+              <div id="delete-confirmation-input-section" className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-2xl space-y-2">
                 <label className="block text-xs font-bold text-slate-800">
                   Type <span className="font-mono text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300 font-black">DELETE BUSINESS</span> to confirm:
                 </label>
@@ -4023,51 +4139,73 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   Error: {deleteErrorMessage}
                 </div>
               )}
+
+              {/* Progress indicator during deletion */}
+              {isDeletingInProgress && (
+                <div className="p-3.5 bg-slate-900 text-white rounded-2xl flex items-center gap-3 text-left">
+                  <RefreshCw className="h-5 w-5 text-rose-500 animate-spin shrink-0" />
+                  <div>
+                    <p className="font-bold text-xs">Permanently deleting business and purging records...</p>
+                    <p className="text-[10px] text-slate-400">Erasing Firestore documents, collections, and authentication credentials.</p>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Progress indicator during deletion */}
-            {isDeletingInProgress && (
-              <div className="p-4 bg-slate-900 text-white rounded-2xl flex items-center gap-3 text-left">
-                <RefreshCw className="h-6 w-6 text-rose-500 animate-spin shrink-0" />
-                <div>
-                  <p className="font-bold text-xs">Permanently deleting business and purging records...</p>
-                  <p className="text-[11px] text-slate-400">Erasing Firestore documents, collections, and authentication credentials.</p>
-                </div>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-2">
+            {/* Modal Footer: Fixed bottom action buttons with quick scroll toggle */}
+            <div className="flex items-center justify-between px-4 py-3 sm:px-6 sm:py-3.5 border-t border-slate-100 bg-slate-50/90 shrink-0 gap-2">
               <button
                 type="button"
-                id="btn-cancel-delete-biz"
-                disabled={isDeletingInProgress}
-                onClick={() => {
-                  setDeletingBusinessTarget(null);
-                  setDeleteConfirmInput('');
-                  setDeleteErrorMessage(null);
-                }}
-                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[44px]"
+                id="btn-scroll-delete-modal-footer"
+                onClick={toggleDeleteModalScroll}
+                className="px-2.5 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[38px]"
+                title={deleteModalAtBottom ? "Scroll to top" : "Scroll down to confirm"}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                id="btn-confirm-delete-biz"
-                disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
-                onClick={executeDeleteBusiness}
-                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[44px]"
-              >
-                {isDeletingInProgress ? (
+                {deleteModalAtBottom ? (
                   <>
-                    <RefreshCw className="h-4 w-4 animate-spin" /> Deleting...
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    <span>Back to Top</span>
                   </>
                 ) : (
                   <>
-                    <Trash2 className="h-4 w-4" /> Delete Permanently
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    <span>Scroll Down</span>
                   </>
                 )}
               </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-cancel-delete-biz"
+                  disabled={isDeletingInProgress}
+                  onClick={() => {
+                    setDeletingBusinessTarget(null);
+                    setDeleteConfirmInput('');
+                    setDeleteErrorMessage(null);
+                  }}
+                  className="px-3.5 py-2 sm:px-4 sm:py-2.5 bg-white hover:bg-slate-100 border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[40px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="btn-confirm-delete-biz"
+                  disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
+                  onClick={executeDeleteBusiness}
+                  className="px-4 py-2 sm:px-5 sm:py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[40px]"
+                >
+                  {isDeletingInProgress ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" /> Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-4 w-4" /> Delete Permanently
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
