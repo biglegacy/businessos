@@ -300,5 +300,10 @@ service cloud.firestore {
     match /bos_school_announcements/{id} {
       allow read, write: if true;
     }
+
+    // Universal catch-all for all other applet collections and subcollections
+    match /{document=**} {
+      allow read, write: if true;
+    }
   }
 }

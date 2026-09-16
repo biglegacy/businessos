@@ -317,6 +317,30 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
     showSuccess('Dispensation Complete', `Sale ${saleRecord.id} recorded successfully.`);
     setCompletedSale(saleRecord);
     setSmsPhoneInput(selectedCustomer?.phone || '');
+
+    // Automatically send SMS receipt via Arkesel upon checkout
+    const targetPhone = selectedCustomer?.phone || '';
+    if (targetPhone && business.smsEnabled !== false) {
+      setIsSendingSms(true);
+      const itemsSummary = saleRecord.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
+      const msg = `${business.name}: Dispensation #${saleRecord.id.slice(-6)} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(saleRecord.total, business.currency || 'GHC')}. Thank you!`;
+      db.sendSms({
+        recipient: targetPhone,
+        message: msg,
+        businessId: business.id,
+        businessName: business.name,
+        type: 'receipt'
+      }).then(res => {
+        setIsSendingSms(false);
+        if (res.success) {
+          showSuccess('SMS Sent', `Receipt SMS automatically delivered to ${targetPhone}.`);
+        }
+      }).catch(err => {
+        setIsSendingSms(false);
+        console.warn('Auto SMS error in PharmacyPOS:', err);
+      });
+    }
+
     setIsPaymentModalOpen(false);
     setIsReceiptModalOpen(true);
     setCart([]);
@@ -916,31 +940,50 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
               </button>
 
               <div className="pt-2 border-t border-slate-100 space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    type="tel"
-                    value={smsPhoneInput}
-                    onChange={e => setSmsPhoneInput(e.target.value)}
-                    placeholder="Patient Phone (e.g. 0244123456)"
-                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
-                  <button
-                    onClick={handleSendSmsReceipt}
-                    disabled={isSendingSms}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0"
-                  >
-                    {isSendingSms ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <span>Sending...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-3.5 w-3.5" />
-                        <span>Send SMS</span>
-                      </>
+                <div className="p-3 bg-emerald-50/60 border border-emerald-200/80 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-emerald-800">
+                    <span className="flex items-center gap-1.5">
+                      <Send className="h-3.5 w-3.5 text-emerald-700" />
+                      Automatic SMS Receipt
+                    </span>
+                    {isSendingSms && (
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-700">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Dispatching...
+                      </span>
                     )}
-                  </button>
+                  </div>
+                  
+                  {smsPhoneInput ? (
+                    <p className="text-[11px] text-emerald-900">
+                      Dispatched automatically to patient phone: <strong className="font-mono">{smsPhoneInput}</strong>
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-slate-500">
+                      No patient phone recorded for automatic SMS.
+                    </p>
+                  )}
+
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="tel"
+                      value={smsPhoneInput}
+                      onChange={e => setSmsPhoneInput(e.target.value)}
+                      placeholder="Enter phone to resend SMS..."
+                      className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <button
+                      onClick={handleSendSmsReceipt}
+                      disabled={isSendingSms}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0"
+                    >
+                      {isSendingSms ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Send className="h-3 w-3" />
+                      )}
+                      <span>Resend</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 

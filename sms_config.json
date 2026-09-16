@@ -1,0 +1,10 @@
+{
+  "apiKey": "QldvUUtlbVFhSmtTY25jYmRldXI",
+  "senderId": "BusinessOS",
+  "apiEndpoint": "https://sms.arkesel.com/api/v2/sms/send",
+  "isEnabled": true,
+  "lastTestedAt": "2026-09-16T09:05:12.289Z",
+  "lastTestStatus": "Active & Connected",
+  "lastTestMessage": "Successfully Submitted",
+  "totalSentCount": 1
+}

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { db, formatCurrency } from '../lib/db';
 import { Business, Product } from '../types';
 import {
@@ -72,7 +72,17 @@ export const BeautyProducts: React.FC<BeautyProductsProps> = ({
   const [description, setDescription] = useState('');
   const [imageUrl, setImageUrl] = useState('');
 
-  const products = db.getProducts(business.id);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      setRefreshKey(k => k + 1);
+    };
+    window.addEventListener('bos_storage_update', handleStorageUpdate);
+    return () => window.removeEventListener('bos_storage_update', handleStorageUpdate);
+  }, []);
+
+  const products = useMemo(() => db.getProducts(business.id), [business.id, refreshKey]);
   const now = new Date();
 
   // Filtered Products
@@ -175,6 +185,8 @@ export const BeautyProducts: React.FC<BeautyProductsProps> = ({
       editingProduct ? 'Product Updated' : 'Product Added',
       `"${targetProduct.name}" saved to beauty catalog.`
     );
+    setRefreshKey(k => k + 1);
+    window.dispatchEvent(new Event('bos_storage_update'));
     setIsModalOpen(false);
   };
 
@@ -182,6 +194,8 @@ export const BeautyProducts: React.FC<BeautyProductsProps> = ({
     if (confirm(`Delete "${prodName}" from beauty catalog?`)) {
       db.deleteProduct(business.id, id);
       showSuccess('Product Removed', `"${prodName}" deleted.`);
+      setRefreshKey(k => k + 1);
+      window.dispatchEvent(new Event('bos_storage_update'));
     }
   };
 

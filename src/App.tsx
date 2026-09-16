@@ -1442,35 +1442,36 @@ export default function App() {
       )}
 
       {/* Dynamic Desktop Sidebar Panel */}
+      {/* Dynamic Desktop Sidebar Panel (White theme with blue accents) */}
       <aside className={`
-        fixed inset-y-0 left-0 w-64 bg-slate-900 text-slate-200 flex flex-col shrink-0 z-50 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen
+        fixed inset-y-0 left-0 w-64 bg-white text-slate-700 border-r border-slate-200 flex flex-col shrink-0 z-50 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen shadow-lg lg:shadow-none
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Header Branding */}
-        <div className="p-6 mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="p-6 mb-2 flex items-center justify-between border-b border-slate-100">
+          <div className="flex items-center gap-3 min-w-0">
             {activeBusiness.logoUrl ? (
               <img 
                 src={activeBusiness.logoUrl} 
                 alt={activeBusiness.name} 
-                className="w-10 h-10 rounded-xl object-cover border border-slate-700 bg-white shadow-md"
+                className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white shadow-xs"
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-md text-white font-extrabold text-xl">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-xs text-white font-extrabold text-xl shrink-0">
                 {activeBusiness.name.charAt(0)}
               </div>
             )}
             <div className="min-w-0">
-              <h1 className="font-bold text-white text-base tracking-tight leading-none truncate">{activeBusiness.name}</h1>
-              <span className="text-[10px] text-blue-400 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
+              <h1 className="font-bold text-slate-900 text-base tracking-tight leading-none truncate">{activeBusiness.name}</h1>
+              <span className="text-[10px] text-blue-600 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
             </div>
           </div>
 
           {/* Mobile Close Button */}
           <button 
             onClick={() => setIsMobileMenuOpen(false)}
-            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
+            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
           >
             <X className="h-5 w-5" />
           </button>
@@ -1493,7 +1494,7 @@ export default function App() {
                 className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 text-sm font-medium transition-colors cursor-pointer ${
                   activeTab === item.name 
                     ? 'bg-blue-600 text-white rounded-xl shadow-xs font-semibold' 
-                    : 'text-slate-400 hover:bg-slate-800/80 hover:text-white rounded-xl transition-colors'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-xl transition-colors'
                 }`}
               >
                 <IconComp className="h-5 w-5 text-current" />
@@ -1504,36 +1505,36 @@ export default function App() {
         </div>
 
         {/* Bottom session user profile and Tenant ID details */}
-        <div className="p-5 mt-auto space-y-3">
+        <div className="p-5 mt-auto space-y-3 border-t border-slate-100">
           {isAdmin && (
             <button
               onClick={() => {
                 setAdminActiveBusiness(null);
                 setActiveTab('Dashboard');
               }}
-              className="w-full text-left px-4 py-2.5 bg-indigo-900/50 hover:bg-indigo-900 text-indigo-100 rounded-xl flex items-center gap-3 text-xs font-black transition-colors border border-indigo-500/20 shadow-md cursor-pointer"
+              className="w-full text-left px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl flex items-center gap-3 text-xs font-bold transition-colors border border-blue-200 shadow-xs cursor-pointer"
             >
-              <Shield className="h-4 w-4 text-indigo-300" />
+              <Shield className="h-4 w-4 text-blue-600" />
               <span>Admin Panel</span>
             </button>
           )}
 
-          <div className="p-3.5 bg-slate-800/60 rounded-2xl border border-slate-700/50 space-y-2">
-            <div className="text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-1">Tenant ID</div>
-            <div className="text-xs text-slate-200 font-mono truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+            <div className="text-[10px] uppercase tracking-widest text-blue-600 font-bold mb-1">Tenant ID</div>
+            <div className="text-xs text-slate-800 font-mono font-semibold truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
             <div className="pt-1">
               <InstallAppButton variant="sidebar" />
             </div>
           </div>
 
-          <div className="p-3 bg-slate-800/90 rounded-xl flex items-center justify-between text-xs border border-slate-700/60">
+          <div className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs border border-slate-200">
             <div className="truncate pr-2">
-              <p className="font-semibold text-white truncate leading-snug">{currentUser.name}</p>
-              <span className="text-[9px] text-blue-400 font-bold uppercase block mt-0.5">{currentUser.role}</span>
+              <p className="font-semibold text-slate-900 truncate leading-snug">{currentUser.name}</p>
+              <span className="text-[9px] text-blue-600 font-bold uppercase block mt-0.5">{currentUser.role}</span>
             </div>
             <button
               onClick={handleLogout}
-              className="p-1.5 hover:bg-rose-600/20 hover:text-rose-400 rounded-lg transition shrink-0 cursor-pointer text-slate-400"
+              className="p-1.5 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition shrink-0 cursor-pointer text-slate-400"
               title="Sign Out Session"
             >
               <LogOut className="h-4 w-4" />

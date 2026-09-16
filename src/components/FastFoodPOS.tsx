@@ -237,6 +237,19 @@ export const FastFoodPOS: React.FC<FastFoodPOSProps> = ({ business, user, onOrde
       details: `Order #${orderNumber} (${orderType}) created for ${formatCurrency(total, currency)}. Ingredients auto-deducted.`
     });
 
+    // 5. Automatically send SMS receipt via Arkesel
+    if (customerPhone && business.smsEnabled !== false) {
+      const itemsSummary = cartItems.map(i => `${i.quantity}x ${i.menuItem.name}`).slice(0, 3).join(', ');
+      const msg = `${business.name}: Order #${orderNumber} (${orderType}) confirmed! Total: ${formatCurrency(total, currency)}. Items: ${itemsSummary}. Thank you!`;
+      db.sendSms({
+        recipient: customerPhone,
+        message: msg,
+        businessId: business.id,
+        businessName: business.name,
+        type: 'receipt'
+      }).catch(err => console.warn('Auto SMS dispatch skipped/failed in FastFoodPOS:', err));
+    }
+
     setLastOrder(orderData);
     setShowSuccessModal(true);
     clearCart();

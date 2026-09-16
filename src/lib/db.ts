@@ -787,6 +787,42 @@ class CloudDatabase {
     }
   }
 
+  public async toggleBulkBusinessSms(businessIds: string[], smsEnabled: boolean): Promise<{ success: boolean; updatedCount: number }> {
+    const list = this.getBusinesses();
+    const idSet = new Set(businessIds);
+    let count = 0;
+    list.forEach(b => {
+      if (idSet.has(b.id)) {
+        b.smsEnabled = smsEnabled;
+        b.updatedAt = new Date().toISOString();
+        count++;
+      }
+    });
+    this.write('bos_businesses', list);
+
+    // Also directly update in Firestore if client has permission
+    try {
+      businessIds.forEach(id => {
+        setDoc(doc(firestore, 'bos_businesses', id), {
+          smsEnabled,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(() => {});
+      });
+    } catch (e) {}
+
+    try {
+      const res = await fetch('/api/admin/bulk-business-sms-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessIds, smsEnabled })
+      });
+      const data = await res.json();
+      return { success: true, updatedCount: data.updatedCount ?? count };
+    } catch (e) {
+      return { success: true, updatedCount: count };
+    }
+  }
+
   // --- PRICING PLANS OPERATIONS ---
   public getPricingPlans(): any[] {
     const plans = this.read<any>('bos_pricing_plans');

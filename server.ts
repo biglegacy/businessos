@@ -1573,6 +1573,73 @@ app.post('/api/admin/business-sms-toggle', async (req, res) => {
   }
 });
 
+// Bulk toggle SMS status for multiple businesses
+app.post('/api/admin/bulk-business-sms-toggle', async (req, res) => {
+  try {
+    const { businessIds, smsEnabled } = req.body;
+    if (!Array.isArray(businessIds) || businessIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'businessIds array is required' });
+    }
+
+    const isEnabled = smsEnabled === true || smsEnabled === 'true' || smsEnabled === 1;
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const idSet = new Set(businessIds);
+    let updatedCount = 0;
+    const updatedNames: string[] = [];
+
+    businesses.forEach((b: any) => {
+      if (b && idSet.has(b.id)) {
+        b.smsEnabled = isEnabled;
+        b.updatedAt = new Date().toISOString();
+        updatedCount++;
+        updatedNames.push(b.name || b.id);
+      }
+    });
+
+    // Persist to cloud_db.json
+    dbData['bos_businesses'] = businesses;
+
+    // Record audit log
+    const auditEntry = {
+      id: 'audit-bulk-sms-' + Date.now(),
+      action: isEnabled ? 'BULK_ENABLE_BUSINESS_SMS' : 'BULK_DISABLE_BUSINESS_SMS',
+      timestamp: new Date().toISOString(),
+      status: 'Success',
+      details: `Super Admin bulk set SMS to ${isEnabled ? 'ENABLED' : 'DISABLED'} for ${updatedCount} businesses (${updatedNames.slice(0, 5).join(', ')}${updatedNames.length > 5 ? '...' : ''}).`
+    };
+    if (!Array.isArray(dbData['bos_feature_audit_logs'])) dbData['bos_feature_audit_logs'] = [];
+    dbData['bos_feature_audit_logs'].unshift(auditEntry);
+    writeDatabase(dbData);
+
+    // Sync to Firestore if available
+    const firestoreDb = getFirestoreDbInstance();
+    if (firestoreDb) {
+      const batch = firestoreDb.batch();
+      businessIds.forEach(id => {
+        const ref = firestoreDb.collection('bos_businesses').doc(id);
+        batch.set(ref, {
+          smsEnabled: isEnabled,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      });
+      batch.commit().catch((err: any) => console.error('Firestore batch commit bulk SMS err:', err));
+    }
+
+    console.log(`[Super Admin Bulk SMS Control] Set SMS ${isEnabled ? 'ENABLED' : 'DISABLED'} for ${updatedCount} businesses`);
+
+    return res.json({
+      success: true,
+      updatedCount,
+      smsEnabled: isEnabled,
+      message: `SMS successfully ${isEnabled ? 'enabled' : 'disabled'} for ${updatedCount} selected business${updatedCount === 1 ? '' : 'es'}.`
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/bulk-business-sms-toggle:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // =========================================================================
 // SUPER ADMIN PRICING PLANS ENDPOINTS
 // =========================================================================

@@ -330,25 +330,21 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
     const isEdit = editingProd && editingProd.id;
     const targetId = isEdit ? editingProd.id : 'p-' + Math.random().toString(36).substring(2, 9);
 
-    // Branch selection validation
+    // Branch selection (optional - not compulsory)
     const branches = db.getBranches(business.id);
     const resolvedBranchId = prodBranchId || user.branchId || '';
-    if (branches.length > 0) {
-      if (!resolvedBranchId) {
-        alert('Branch selection is required.');
+
+    // SKU Code duplication check (only within the same branch store if specified)
+    if (prodBarcode.trim()) {
+      const isDuplicate = products.some(p => 
+        p.id !== targetId && 
+        p.barcode.toLowerCase() === prodBarcode.trim().toLowerCase() &&
+        (!resolvedBranchId || !p.branchId || p.branchId === resolvedBranchId)
+      );
+      if (isDuplicate) {
+        alert(`SKU/Product Code "${prodBarcode}" already exists in the selected branch store. Please specify a unique SKU / Product Code.`);
         return;
       }
-    }
-
-    // SKU Code duplication check (only within the same branch store)
-    const isDuplicate = products.some(p => 
-      p.id !== targetId && 
-      p.barcode.toLowerCase() === prodBarcode.trim().toLowerCase() &&
-      (p.branchId || '') === resolvedBranchId
-    );
-    if (isDuplicate) {
-      alert(`SKU/Product Code "${prodBarcode}" already exists in the selected branch store. Please specify a unique SKU / Product Code.`);
-      return;
     }
 
     const productData: Product = {
@@ -1329,14 +1325,13 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
 
                 {['owner', 'admin', 'manager'].includes(user.role) && db.getBranches(business.id).length > 0 && (
                   <div>
-                    <label className="block text-slate-500 font-bold uppercase mb-1">Branch Store Assignment *</label>
+                    <label className="block text-slate-500 font-bold uppercase mb-1">Branch Store Assignment (Optional)</label>
                     <select
-                      required
                       value={prodBranchId}
                       onChange={(e) => setProdBranchId(e.target.value)}
-                      className="block w-full px-3 py-2 border border-slate-200 bg-white rounded-lg text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                      className="block w-full px-3 py-2 border border-slate-200 bg-white rounded-lg text-slate-800 font-medium focus:ring-1 focus:ring-emerald-500 cursor-pointer"
                     >
-                      <option value="">-- Select Branch * --</option>
+                      <option value="">-- All Branches / None --</option>
                       {db.getBranches(business.id).map(b => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}

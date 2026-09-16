@@ -580,7 +580,35 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     setDiscountPercent(0);
     setSelectedCustomerId('');
     setCheckoutCustomerPhone('');
-    alert('POS sale completed successfully! Invoice receipt generated.');
+
+    // Automatically send SMS receipt via Arkesel upon checkout
+    if (targetPhone && business.smsEnabled !== false) {
+      setIsSendingSmsReceipt(true);
+      setSmsReceiptStatus(null);
+      const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+      const msg = `${business.name}: Receipt #${newSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(newSale.total, newSale.currency || business.currency)}. Thank you for your patronage!`;
+
+      db.sendSms({
+        recipient: targetPhone,
+        message: msg,
+        businessId: business.id,
+        businessName: business.name,
+        type: 'receipt'
+      }).then(res => {
+        setIsSendingSmsReceipt(false);
+        if (res.success) {
+          setSmsReceiptStatus({ success: true, message: `Receipt SMS automatically sent to ${targetPhone}.` });
+        } else {
+          setSmsReceiptStatus({ success: false, message: res.message || 'SMS delivery failed or skipped.' });
+        }
+      }).catch(err => {
+        setIsSendingSmsReceipt(false);
+        setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
+      });
+    } else if (targetPhone && business.smsEnabled === false) {
+      setSmsReceiptStatus({ success: false, message: 'SMS is disabled for this business in Super Admin.' });
+    }
+
     onSaleComplete();
   };
 
@@ -1491,41 +1519,64 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
             </div>
 
             <div className="space-y-2">
-              {/* SMS Receipt Quick Dispatch */}
+              {/* Automatic SMS Receipt Dispatch Status */}
               <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                  <Send className="h-3.5 w-3.5 text-emerald-800" /> Send Instant SMS Receipt
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="tel"
-                    value={smsReceiptPhone}
-                    onChange={e => setSmsReceiptPhone(e.target.value)}
-                    placeholder="Customer Phone (e.g. 0244123456)"
-                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
-                  <button
-                    onClick={handleSendSmsReceipt}
-                    disabled={isSendingSmsReceipt}
-                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition shrink-0"
-                  >
-                    {isSendingSmsReceipt ? (
-                      <>
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Sending...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-3 w-3" />
-                        <span>Send</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                {smsReceiptStatus && (
-                  <p className={`text-[10px] font-semibold ${smsReceiptStatus.success ? 'text-emerald-800' : 'text-rose-600'}`}>
-                    {smsReceiptStatus.message}
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                    <Send className="h-3.5 w-3.5 text-blue-600" /> Automatic SMS Receipt
                   </p>
+                  {isSendingSmsReceipt && (
+                    <span className="flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Dispatching...
+                    </span>
+                  )}
+                </div>
+
+                {smsReceiptStatus ? (
+                  <div className={`text-xs p-2 rounded-xl flex items-center gap-2 ${
+                    smsReceiptStatus.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                  }`}>
+                    {smsReceiptStatus.success ? (
+                      <Sparkles className="h-4 w-4 shrink-0 text-emerald-600" />
+                    ) : (
+                      <X className="h-4 w-4 shrink-0 text-rose-500" />
+                    )}
+                    <span className="flex-1 text-[11px] leading-tight">{smsReceiptStatus.message}</span>
+                  </div>
+                ) : smsReceiptPhone ? (
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <span>Sending automated SMS to:</span>
+                    <span className="font-mono font-bold text-slate-800">{smsReceiptPhone}</span>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400">
+                    No customer phone number provided during checkout.
+                  </p>
+                )}
+
+                {/* Optional Resend / Manual input if needed */}
+                {(!smsReceiptStatus?.success || !smsReceiptPhone) && (
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="tel"
+                      value={smsReceiptPhone}
+                      onChange={e => setSmsReceiptPhone(e.target.value)}
+                      placeholder="Enter phone to resend SMS..."
+                      className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={handleSendSmsReceipt}
+                      disabled={isSendingSmsReceipt}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition shrink-0"
+                    >
+                      {isSendingSmsReceipt ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Send className="h-3 w-3" />
+                      )}
+                      <span>Resend</span>
+                    </button>
+                  </div>
                 )}
               </div>
 

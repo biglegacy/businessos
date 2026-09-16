@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { db, formatCurrency } from '../lib/db';
 import { Business, Product, PharmacyBatch, Supplier } from '../types';
 import {
@@ -105,10 +105,21 @@ export const PharmacyMedicines: React.FC<PharmacyMedicinesProps> = ({
   const [newBatchCostPrice, setNewBatchCostPrice] = useState<string>('');
   const [newBatchSupplier, setNewBatchSupplier] = useState('');
 
-  // Load Data
-  const products = db.getProducts(business.id);
-  const batches = db.getPharmacyBatches(business.id);
-  const suppliers = db.getSuppliers(business.id);
+  // Reactive state refresher
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      setRefreshKey(k => k + 1);
+    };
+    window.addEventListener('bos_storage_update', handleStorageUpdate);
+    return () => window.removeEventListener('bos_storage_update', handleStorageUpdate);
+  }, []);
+
+  // Load Data with refreshKey reactivity
+  const products = useMemo(() => db.getProducts(business.id), [business.id, refreshKey]);
+  const batches = useMemo(() => db.getPharmacyBatches(business.id), [business.id, refreshKey]);
+  const suppliers = useMemo(() => db.getSuppliers(business.id), [business.id, refreshKey]);
 
   const now = new Date();
 
@@ -246,6 +257,8 @@ export const PharmacyMedicines: React.FC<PharmacyMedicinesProps> = ({
       editingProduct ? 'Medicine Updated' : 'Medicine Added',
       `"${targetProduct.name}" saved to pharmacy registry.`
     );
+    setRefreshKey(k => k + 1);
+    window.dispatchEvent(new Event('bos_storage_update'));
     setIsModalOpen(false);
   };
 
@@ -304,6 +317,8 @@ export const PharmacyMedicines: React.FC<PharmacyMedicinesProps> = ({
     db.saveProduct(business.id, updatedProd);
 
     showSuccess('Batch Registered', `Added batch ${batchRecord.batchNumber} (${bQty} units) to "${selectedProductForBatch.name}".`);
+    setRefreshKey(k => k + 1);
+    window.dispatchEvent(new Event('bos_storage_update'));
     setIsBatchModalOpen(false);
   };
 
@@ -311,6 +326,8 @@ export const PharmacyMedicines: React.FC<PharmacyMedicinesProps> = ({
     if (confirm(`Are you sure you want to remove "${name}" from the dispensary database?`)) {
       db.deleteProduct(business.id, id);
       showSuccess('Medicine Removed', `"${name}" removed.`);
+      setRefreshKey(k => k + 1);
+      window.dispatchEvent(new Event('bos_storage_update'));
     }
   };
 
@@ -731,11 +748,10 @@ export const PharmacyMedicines: React.FC<PharmacyMedicinesProps> = ({
                 {/* Expiry Date */}
                 <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">
-                    Expiry Date *
+                    Expiry Date (Optional)
                   </label>
                   <input
                     type="date"
-                    required
                     value={expiryDate}
                     onChange={e => setExpiryDate(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"

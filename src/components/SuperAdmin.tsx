@@ -12,9 +12,9 @@ import {
   Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye, EyeOff,
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
-  MessageSquare, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
+  MessageSquare, MessageSquareOff, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
   Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch,
-  LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown
+  LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown, CheckSquare, Square
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -175,21 +175,73 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   };
 
   // =========================================================================
-  // SUPER ADMIN PER-BUSINESS SMS CONTROL (Requirement 11 & 12)
+  // SUPER ADMIN PER-BUSINESS & BULK SMS CONTROL (Requirement 1 & 12)
   // =========================================================================
   const [businessSmsSearch, setBusinessSmsSearch] = useState('');
   const [togglingSmsBusId, setTogglingSmsBusId] = useState<string | null>(null);
+  const [selectedBusinessIds, setSelectedBusinessIds] = useState<string[]>([]);
+  const [isBulkTogglingSms, setIsBulkTogglingSms] = useState(false);
+  const [bulkSmsFeedback, setBulkSmsFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleToggleBusinessSms = async (busId: string, currentStatus: boolean) => {
     setTogglingSmsBusId(busId);
     try {
       const newStatus = !currentStatus;
       await db.toggleBusinessSms(busId, newStatus);
+      const fresh = await db.fetchBusinessesFromFirestore();
+      if (fresh && fresh.length > 0) {
+        setFirestoreBusinesses(fresh);
+      }
       forceUpdate();
     } catch (e) {
       console.warn('Error toggling business SMS:', e);
     } finally {
       setTogglingSmsBusId(null);
+    }
+  };
+
+  const handleBulkToggleSms = async (enable: boolean) => {
+    if (selectedBusinessIds.length === 0) return;
+    setIsBulkTogglingSms(true);
+    setBulkSmsFeedback(null);
+    try {
+      const res = await db.toggleBulkBusinessSms(selectedBusinessIds, enable);
+      const fresh = await db.fetchBusinessesFromFirestore();
+      if (fresh && fresh.length > 0) {
+        setFirestoreBusinesses(fresh);
+      }
+      forceUpdate();
+      const count = res.updatedCount || selectedBusinessIds.length;
+      setBulkSmsFeedback({
+        type: 'success',
+        text: `Successfully ${enable ? 'ENABLED' : 'DISABLED'} SMS for all ${count} selected business${count === 1 ? '' : 'es'}. Status updated in database.`
+      });
+      setSelectedBusinessIds([]);
+      setTimeout(() => setBulkSmsFeedback(null), 6000);
+    } catch (e: any) {
+      console.error('Error in bulk SMS toggle:', e);
+      setBulkSmsFeedback({
+        type: 'error',
+        text: 'Failed to update SMS status for selected businesses. Please retry.'
+      });
+    } finally {
+      setIsBulkTogglingSms(false);
+    }
+  };
+
+  const handleToggleSelectBusiness = (busId: string) => {
+    setSelectedBusinessIds(prev => 
+      prev.includes(busId) ? prev.filter(id => id !== busId) : [...prev, busId]
+    );
+  };
+
+  const handleSelectAllFiltered = (list: Business[]) => {
+    const allIds = list.map(b => b.id);
+    const isAllSelected = allIds.length > 0 && allIds.every(id => selectedBusinessIds.includes(id));
+    if (isAllSelected) {
+      setSelectedBusinessIds(prev => prev.filter(id => !allIds.includes(id)));
+    } else {
+      setSelectedBusinessIds(prev => Array.from(new Set([...prev, ...allIds])));
     }
   };
 
@@ -1066,19 +1118,19 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
   const superAdminNavContent = (
     <>
-      <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+      <div className="p-6 border-b border-slate-200 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-emerald-900/30">
+          <div className="h-10 w-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-xs shadow-blue-500/20">
             S
           </div>
           <div>
-            <h1 className="font-extrabold text-white text-base tracking-tight leading-none">SuperAdmin</h1>
-            <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-bold">BOS Global Control</span>
+            <h1 className="font-extrabold text-slate-900 text-base tracking-tight leading-none">SuperAdmin</h1>
+            <span className="text-[10px] text-blue-600 uppercase tracking-wider font-bold">BOS Global Control</span>
           </div>
         </div>
         <button
           onClick={() => setIsMobileNavOpen(false)}
-          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-slate-100 cursor-pointer"
         >
           <X className="h-5 w-5" />
         </button>
@@ -1088,122 +1140,122 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('businesses'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'businesses' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'businesses' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Building className="h-4 w-4" /> Businesses &amp; Schools
+          <Building className="h-4 w-4 text-current" /> Businesses &amp; Schools
         </button>
 
         <button
           onClick={() => { setActiveTab('pricing'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'pricing' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'pricing' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <DollarSign className="h-4 w-4 text-emerald-400" /> Pricing Management
+          <DollarSign className="h-4 w-4 text-current" /> Pricing Management
         </button>
 
         <button
           onClick={() => { setActiveTab('popups'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'popups' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'popups' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Sparkles className="h-4 w-4 text-amber-400" /> Popup Prompts (5-30d)
+          <Sparkles className="h-4 w-4 text-current" /> Popup Prompts (5-30d)
         </button>
 
         <button
           onClick={() => { setActiveTab('paynow'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'paynow' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'paynow' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <CreditCard className="h-4 w-4 text-emerald-400" /> Paystack API Settings
+          <CreditCard className="h-4 w-4 text-current" /> Paystack API Settings
         </button>
 
         <button
           id="nav-superadmin-sms"
           onClick={() => { setActiveTab('sms'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'sms' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'sms' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <MessageSquare className="h-4 w-4 text-emerald-400" /> SMS / Arkesel
+          <MessageSquare className="h-4 w-4 text-current" /> SMS / Arkesel
         </button>
 
         <button
           onClick={() => { setActiveTab('users'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'users' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'users' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Users className="h-4 w-4" /> Global User Directory
+          <Users className="h-4 w-4 text-current" /> Global User Directory
         </button>
 
         <button
           onClick={() => { setActiveTab('notifications'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'notifications' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'notifications' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Bell className="h-4 w-4 text-amber-400" /> Push Notifications
+          <Bell className="h-4 w-4 text-current" /> Push Notifications
         </button>
 
         <button
           onClick={() => { setActiveTab('registration'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'registration' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'registration' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Globe className="h-4 w-4" /> Registration Control
+          <Globe className="h-4 w-4 text-current" /> Registration Control
         </button>
 
         <button
           onClick={() => { setActiveTab('system'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'system' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'system' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Settings className="h-4 w-4" /> System Configuration
+          <Settings className="h-4 w-4 text-current" /> System Configuration
         </button>
 
         <button
           onClick={() => { setActiveTab('cloud'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'cloud' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'cloud' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Database className="h-4 w-4" /> Cloud &amp; Storage
+          <Database className="h-4 w-4 text-current" /> Cloud &amp; Storage
         </button>
 
         <button
           onClick={() => { setActiveTab('monitoring'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'monitoring' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'monitoring' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Activity className="h-4 w-4" /> Platform Monitoring
+          <Activity className="h-4 w-4 text-current" /> Platform Monitoring
         </button>
 
         <button
           onClick={() => { setActiveTab('features'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'features' ? 'bg-emerald-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'
+            activeTab === 'features' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Sliders className="h-4 w-4" /> Feature Gates
+          <Sliders className="h-4 w-4 text-current" /> Feature Gates
         </button>
       </nav>
 
-      <div className="p-4 border-t border-slate-800">
-        <div className="p-3 bg-slate-800/60 rounded-xl flex items-center justify-between">
+      <div className="p-4 border-t border-slate-200">
+        <div className="p-3 bg-slate-50 rounded-xl flex items-center justify-between border border-slate-200">
           <div className="truncate">
-            <p className="text-xs font-bold text-white truncate">Administrator</p>
-            <p className="text-[10px] text-slate-400 truncate font-mono">admin@business.os</p>
+            <p className="text-xs font-bold text-slate-900 truncate">Administrator</p>
+            <p className="text-[10px] text-slate-500 truncate font-mono">admin@business.os</p>
           </div>
           <button 
             onClick={onLogout}
-            className="p-1.5 hover:bg-red-600/20 hover:text-red-400 rounded-lg transition cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="p-1.5 hover:bg-rose-50 hover:text-rose-600 text-slate-400 rounded-lg transition cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
             title="Secure Logout"
           >
             <LogOut className="h-4 w-4" />
@@ -1219,38 +1271,38 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       {isMobileNavOpen && (
         <div 
           onClick={() => setIsMobileNavOpen(false)}
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 lg:hidden"
+          className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs z-50 lg:hidden"
         />
       )}
 
       {/* Mobile Slide-Out Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-72 bg-slate-900 text-slate-300 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out lg:hidden ${
+      <aside className={`fixed inset-y-0 left-0 z-50 w-72 bg-white text-slate-700 border-r border-slate-200 flex flex-col shadow-2xl transition-transform duration-200 ease-in-out lg:hidden ${
         isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'
       }`}>
         {superAdminNavContent}
       </aside>
 
       {/* Desktop Persistent Sidebar */}
-      <aside className="hidden lg:flex w-64 bg-slate-900 text-slate-300 flex-col shrink-0 lg:h-full">
+      <aside className="hidden lg:flex w-64 bg-white text-slate-700 border-r border-slate-200 flex-col shrink-0 lg:h-full shadow-xs">
         {superAdminNavContent}
       </aside>
 
       {/* Main Panel */}
       <main className="flex-1 flex flex-col min-w-0 lg:h-full lg:overflow-hidden">
         {/* Mobile Header Bar */}
-        <header className="lg:hidden bg-slate-900 text-white px-4 py-3 flex items-center justify-between shadow-md shrink-0 sticky top-0 z-30">
+        <header className="lg:hidden bg-white text-slate-900 border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-xs shrink-0 sticky top-0 z-30">
           <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-sm shadow">
+            <div className="h-8 w-8 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-sm shadow-xs">
               S
             </div>
             <div>
-              <h2 className="text-xs font-black tracking-tight leading-none">SuperAdmin</h2>
-              <span className="text-[9px] text-emerald-400 font-bold uppercase">Control Panel</span>
+              <h2 className="text-xs font-black tracking-tight leading-none text-slate-900">SuperAdmin</h2>
+              <span className="text-[9px] text-blue-600 font-bold uppercase">Control Panel</span>
             </div>
           </div>
           <button
             onClick={() => setIsMobileNavOpen(true)}
-            className="p-2 rounded-xl bg-slate-800 text-slate-200 hover:text-white cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="p-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-900 cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
             aria-label="Open Navigation Menu"
           >
             <Menu className="h-5 w-5" />
@@ -1404,6 +1456,29 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   >
                     Retail &amp; Other ({businesses.filter(b => !b.category?.toLowerCase().includes('school')).length})
                   </button>
+
+                  {/* Quick Select All Toggle for Bulk Actions */}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectAllFiltered(filteredBusinesses)}
+                    className={`ml-1 px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[38px] border ${
+                      filteredBusinesses.length > 0 && filteredBusinesses.every(b => selectedBusinessIds.includes(b.id))
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                    title="Select or deselect all visible businesses for bulk actions"
+                  >
+                    {filteredBusinesses.length > 0 && filteredBusinesses.every(b => selectedBusinessIds.includes(b.id)) ? (
+                      <CheckSquare className="h-4 w-4" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                    <span>
+                      {filteredBusinesses.length > 0 && filteredBusinesses.every(b => selectedBusinessIds.includes(b.id))
+                        ? 'Deselect All'
+                        : `Select All (${filteredBusinesses.length})`}
+                    </span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1440,21 +1515,120 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
               </div>
 
+              {/* BULK ACTION TOOLBAR (When businesses are selected) */}
+              {selectedBusinessIds.length > 0 && (
+                <div id="bulk-sms-action-bar" className="bg-blue-50 border-2 border-blue-300 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-sm shrink-0 shadow-xs">
+                      {selectedBusinessIds.length}
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-blue-950 text-sm">
+                        {selectedBusinessIds.length} {selectedBusinessIds.length === 1 ? 'Business' : 'Businesses'} Selected
+                      </p>
+                      <p className="text-[11px] text-blue-700 font-medium">
+                        Enable or disable SMS gateway for all selected businesses at once.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
+                    <button
+                      type="button"
+                      id="btn-bulk-enable-sms"
+                      disabled={isBulkTogglingSms}
+                      onClick={() => handleBulkToggleSms(true)}
+                      className="flex-1 md:flex-initial px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[40px]"
+                      title="Enable SMS for all selected businesses"
+                    >
+                      {isBulkTogglingSms ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <MessageSquare className="h-4 w-4" />
+                      )}
+                      <span>Enable SMS ({selectedBusinessIds.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id="btn-bulk-disable-sms"
+                      disabled={isBulkTogglingSms}
+                      onClick={() => handleBulkToggleSms(false)}
+                      className="flex-1 md:flex-initial px-4 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[40px]"
+                      title="Disable SMS for all selected businesses"
+                    >
+                      {isBulkTogglingSms ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <MessageSquareOff className="h-4 w-4" />
+                      )}
+                      <span>Disable SMS ({selectedBusinessIds.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id="btn-bulk-clear-selection"
+                      onClick={() => setSelectedBusinessIds([])}
+                      className="px-3.5 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer min-h-[40px]"
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Action Feedback Banner */}
+              {bulkSmsFeedback && (
+                <div id="bulk-sms-feedback-banner" className={`p-4 rounded-2xl border flex items-center justify-between gap-3 text-xs font-bold ${
+                  bulkSmsFeedback.type === 'success' 
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-300' 
+                    : 'bg-rose-50 text-rose-900 border-rose-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {bulkSmsFeedback.type === 'success' ? (
+                      <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0" />
+                    )}
+                    <span>{bulkSmsFeedback.text}</span>
+                  </div>
+                  <button 
+                    onClick={() => setBulkSmsFeedback(null)} 
+                    className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
               {/* CARDS VIEW: Responsive across all screen sizes (Desktop, Tablet, Mobile) */}
               {bizViewMode === 'cards' && (
                 <div className="space-y-4">
                   {filteredBusinesses.map(bus => {
                     const details = getBusinessDetails(bus);
+                    const isSelected = selectedBusinessIds.includes(bus.id);
 
                     return (
                       <div 
                         key={bus.id} 
                         id={`business-card-${bus.id}`}
-                        className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4 transition hover:border-slate-300"
+                        className={`bg-white p-4 sm:p-5 rounded-2xl border ${
+                          isSelected ? 'border-blue-500 ring-2 ring-blue-100 shadow-sm' : 'border-slate-200 shadow-xs'
+                        } space-y-4 transition hover:border-slate-300`}
                       >
                         {/* Card Header: Identity & Status */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                           <div className="flex items-center gap-3">
+                            {/* Checkbox for Bulk Multi-Select */}
+                            <input
+                              type="checkbox"
+                              id={`chk-select-card-${bus.id}`}
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectBusiness(bus.id)}
+                              className="h-5 w-5 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0 accent-blue-600"
+                              title={`Select ${bus.name} for bulk SMS action`}
+                            />
+
                             <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0 shadow-sm ${
                               details.isSchool ? 'bg-indigo-600 shadow-indigo-100' : 'bg-emerald-600 shadow-emerald-100'
                             }`}>
@@ -1663,6 +1837,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   <table className="w-full text-left border-collapse min-w-[1240px]">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold text-[11px] uppercase tracking-wider">
+                        <th className="py-3.5 px-3 w-12 text-center">
+                          <input
+                            type="checkbox"
+                            id="chk-table-select-all"
+                            checked={filteredBusinesses.length > 0 && filteredBusinesses.every(b => selectedBusinessIds.includes(b.id))}
+                            onChange={() => handleSelectAllFiltered(filteredBusinesses)}
+                            className="h-4 w-4 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                            title="Select all filtered businesses"
+                          />
+                        </th>
                         <th className="py-3.5 px-4">Business &amp; Identifier</th>
                         <th className="py-3.5 px-4">Owner &amp; Contact</th>
                         <th className="py-3.5 px-4">Category &amp; Scale</th>
@@ -1675,9 +1859,22 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     <tbody className="text-slate-700 text-xs divide-y divide-slate-100">
                       {filteredBusinesses.map(bus => {
                         const details = getBusinessDetails(bus);
+                        const isSelected = selectedBusinessIds.includes(bus.id);
 
                         return (
-                          <tr key={bus.id} className="hover:bg-slate-50/70 transition">
+                          <tr key={bus.id} className={`transition ${isSelected ? 'bg-blue-50/60 hover:bg-blue-50' : 'hover:bg-slate-50/70'}`}>
+                            {/* Checkbox */}
+                            <td className="py-3 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                id={`chk-table-bus-${bus.id}`}
+                                checked={isSelected}
+                                onChange={() => handleToggleSelectBusiness(bus.id)}
+                                className="h-4 w-4 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                                title={`Select ${bus.name}`}
+                              />
+                            </td>
+
                             {/* 1. Name & ID */}
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-3">
@@ -1841,7 +2038,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
                       {filteredBusinesses.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="py-12 text-center text-slate-400">
+                          <td colSpan={8} className="py-12 text-center text-slate-400">
                             No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
                           </td>
                         </tr>
