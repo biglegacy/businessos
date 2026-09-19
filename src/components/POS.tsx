@@ -80,10 +80,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
   // Checkout status / Active Invoice Receipt
   const [createdSale, setCreatedSale] = useState<Sale | null>(null);
   const [isReceiptCustomizing, setIsReceiptCustomizing] = useState(false);
-  const [smsReceiptPhone, setSmsReceiptPhone] = useState('');
-  const [isSendingSmsReceipt, setIsSendingSmsReceipt] = useState(false);
   const [isCompletingSale, setIsCompletingSale] = useState(false);
-  const [smsReceiptStatus, setSmsReceiptStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   // Local reload trigger for catalog template updates
   const [localReloadKey, setLocalReloadKey] = useState(0);
@@ -658,15 +655,14 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
       // 3. Generate Receipt / Order Information
       setCreatedSale(newSale);
-      setSmsReceiptPhone(targetPhone || '');
       setCart([]);
       setAmountReceived('');
       setDiscountPercent(0);
       setSelectedCustomerId('');
       setCheckoutCustomerPhone('');
 
-      // 4. Automatic Arkesel SMS Receipt Dispatch with Idempotency & Fault Tolerance
-      // Ensure duplicate SMS sending is prevented by verifying the transaction ID before triggering the call
+      // 4. Background Arkesel SMS Receipt Dispatch (Silent, Fire-and-Forget, Idempotent)
+      // Dispatches completely in the background without letting user see the process or dispatching
       const saleReceiptKey = `bos_sent_sms_${transactionId}`;
       const isAlreadyDispatched = 
         !transactionId ||
@@ -674,90 +670,55 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
         (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(saleReceiptKey) === '1') ||
         (typeof localStorage !== 'undefined' && localStorage.getItem(saleReceiptKey) === '1');
 
-      if (isBusinessSmsEnabled && targetPhone) {
-        if (!isAlreadyDispatched) {
-          // Lock transaction ID immediately to prevent rapid double triggers
-          sentSmsReceiptMap.current.add(transactionId);
-          try {
-            sessionStorage.setItem(saleReceiptKey, '1');
-            localStorage.setItem(saleReceiptKey, '1');
-          } catch {}
+      if (isBusinessSmsEnabled && targetPhone && !isAlreadyDispatched) {
+        sentSmsReceiptMap.current.add(transactionId);
+        try {
+          sessionStorage.setItem(saleReceiptKey, '1');
+          localStorage.setItem(saleReceiptKey, '1');
+        } catch {}
 
-          setIsSendingSmsReceipt(true);
-          setSmsReceiptStatus(null);
+        const receiptNum = transactionId.slice(-6).toUpperCase();
+        const currency = newSale.currency || liveBusiness.currency || business.currency || 'GHS';
+        const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+        const paidStr = formatCurrency(newSale.amountPaid ?? newSale.total, currency);
+        const totalStr = formatCurrency(newSale.total, currency);
+        const balanceStr = newSale.paymentMethod === 'credit' && (newSale.amountOwed || 0) > 0
+          ? `Bal Owed: ${formatCurrency(newSale.amountOwed!, currency)}`
+          : (newSale.change && newSale.change > 0 ? `Change: ${formatCurrency(newSale.change, currency)}` : `Bal: ${formatCurrency(0, currency)}`);
 
-          const receiptNum = transactionId.slice(-6).toUpperCase();
-          const currency = newSale.currency || liveBusiness.currency || business.currency || 'GHS';
-          const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
-          const paidStr = formatCurrency(newSale.amountPaid ?? newSale.total, currency);
-          const totalStr = formatCurrency(newSale.total, currency);
-          const balanceStr = newSale.paymentMethod === 'credit' && (newSale.amountOwed || 0) > 0
-            ? `Bal Owed: ${formatCurrency(newSale.amountOwed!, currency)}`
-            : (newSale.change && newSale.change > 0 ? `Change: ${formatCurrency(newSale.change, currency)}` : `Bal: ${formatCurrency(0, currency)}`);
+        const msg = `Thank you for shopping at ${liveBusiness.name}. Receipt #${receiptNum}. Items: ${itemsSummary}. Total: ${totalStr}. Paid: ${paidStr}. ${balanceStr}. Payment: ${newSale.paymentMethod.toUpperCase()}. Thank you!`;
 
-          const msg = `Thank you for shopping at ${liveBusiness.name}. Receipt #${receiptNum}. Items: ${itemsSummary}. Total: ${totalStr}. Paid: ${paidStr}. ${balanceStr}. Payment: ${newSale.paymentMethod.toUpperCase()}. Thank you!`;
-
-          // Trigger Arkesel SMS call; ensure failures do not cancel or revert the transaction
+        // Silent background dispatch: run in detached task without blocking checkout or displaying dispatching UI
+        setTimeout(() => {
           db.sendSms({
             recipient: targetPhone,
             message: msg,
             businessId: liveBusiness.id,
             businessName: liveBusiness.name,
+            senderId: liveBusiness.name,
             idempotencyKey: `pos_receipt_${transactionId}`,
             type: 'receipt',
             clientTriggerTime: Date.now()
           }).then(res => {
-            setIsSendingSmsReceipt(false);
-            if (res.success) {
-              const updatedSale: Sale = {
-                ...newSale,
-                smsStatus: 'Sent',
-                smsStatusDetail: `Sent to ${targetPhone}`
-              };
-              db.saveSale(business.id, updatedSale);
-              setSmsReceiptStatus({ success: true, message: `Receipt SMS automatically sent to ${targetPhone}.` });
-              showSuccess('Sale Completed', `Sale completed and receipt SMS sent to ${targetPhone}.`);
-            } else {
-              // Log the error and display non-blocking notification (transaction remains successful)
-              console.error('[POS SMS Error] SMS receipt delivery failed for transaction ID:', transactionId, {
-                status: res.status,
-                message: res.message,
-                phone: targetPhone
-              });
-              const updatedSale: Sale = {
-                ...newSale,
-                smsStatus: 'Failed',
-                smsStatusDetail: res.message || res.status || 'SMS delivery failed'
-              };
-              db.saveSale(business.id, updatedSale);
-              setSmsReceiptStatus({ success: false, message: `Order completed, but SMS receipt could not be delivered: ${res.message || 'Gateway error'}` });
-              showError('SMS Notice', `Order completed successfully, but SMS receipt could not be sent: ${res.message || 'SMS service error'}`);
-            }
+            const updatedSale: Sale = {
+              ...newSale,
+              smsStatus: res.success ? 'Sent' : 'Failed',
+              smsStatusDetail: res.success ? `Sent to ${targetPhone}` : (res.message || 'Delivery failed')
+            };
+            db.saveSale(business.id, updatedSale);
           }).catch(err => {
-            // Unhandled network or server exception: log and display non-blocking notification
-            console.error('[POS SMS Error] Network error during Arkesel SMS receipt dispatch for transaction ID:', transactionId, err);
-            setIsSendingSmsReceipt(false);
+            console.warn('[POS Background SMS] Silent background receipt error:', err);
             const updatedSale: Sale = {
               ...newSale,
               smsStatus: 'Failed',
               smsStatusDetail: err?.message || 'Network error sending SMS'
             };
             db.saveSale(business.id, updatedSale);
-            setSmsReceiptStatus({ success: false, message: 'Order completed, but SMS receipt could not be sent due to network issues.' });
-            showError('SMS Notice', 'Order completed successfully, but SMS receipt could not be sent due to network error.');
           });
-        } else {
-          console.warn(`[POS SMS] Suppressed duplicate SMS dispatch: Transaction ID ${transactionId} already verified and processed.`);
-          showSuccess('Sale Completed', 'Sale completed successfully.');
-        }
-      } else if (!targetPhone && isBusinessSmsEnabled) {
-        setSmsReceiptStatus({ success: false, message: 'No customer phone provided. Receipt SMS skipped.' });
-        showSuccess('Sale Completed', 'Sale completed successfully.');
-      } else {
-        // SMS disabled for business
-        showSuccess('Sale Completed', 'Sale completed successfully.');
+        }, 0);
       }
 
+      showSuccess('Sale Completed', 'Order completed successfully.');
       onSaleComplete();
     } catch (err: any) {
       console.error('Checkout processing error:', err);
@@ -1701,44 +1662,6 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
             </div>
 
             <div className="space-y-2">
-              {/* Automatic SMS Receipt Dispatch Status (Only when SMS is enabled for business) */}
-              {liveBusiness.smsEnabled !== false && (
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                      <Send className="h-3.5 w-3.5 text-blue-600" /> Automatic SMS Receipt
-                    </p>
-                    {isSendingSmsReceipt && (
-                      <span className="flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
-                        <Loader2 className="h-3 w-3 animate-spin" /> Dispatching...
-                      </span>
-                    )}
-                  </div>
-
-                  {smsReceiptStatus ? (
-                    <div className={`text-xs p-2 rounded-xl flex items-center gap-2 ${
-                      smsReceiptStatus.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium' : 'bg-rose-50 text-rose-700 border border-rose-200'
-                    }`}>
-                      {smsReceiptStatus.success ? (
-                        <Sparkles className="h-4 w-4 shrink-0 text-emerald-600" />
-                      ) : (
-                        <X className="h-4 w-4 shrink-0 text-rose-500" />
-                      )}
-                      <span className="flex-1 text-[11px] leading-tight">{smsReceiptStatus.message}</span>
-                    </div>
-                  ) : smsReceiptPhone ? (
-                    <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                      <span>Sending automated SMS to:</span>
-                      <span className="font-mono font-bold text-slate-800">{smsReceiptPhone}</span>
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-slate-400">
-                      No customer phone number provided during checkout.
-                    </p>
-                  )}
-                </div>
-              )}
-
               <button
                 onClick={handlePrintSaleReceipt}
                 className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"

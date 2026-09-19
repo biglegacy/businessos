@@ -433,15 +433,20 @@ function normalizePhoneNumber(phone: string): string {
   if (cleaned.startsWith('00')) {
     cleaned = cleaned.substring(2);
   }
-  // Strip accidental redundant 0 after Ghana country code (e.g. +233024xxxxxxx or 233024xxxxxxx -> 23324xxxxxxx)
+  // Strip accidental redundant 0 after Ghana country code 233 (e.g. +233020xxxxxxx or 233020xxxxxxx -> 23320xxxxxxx)
   if (/^2330\d{9}$/.test(cleaned)) {
     cleaned = '233' + cleaned.substring(4);
   }
-  // Ghana local 10-digit mobile check (MTN: 024, 054, 055, 059, 053; Telecel: 020, 050; AT: 027, 057, 026, 056; Glo: 023; Fixed: 030-039)
+  // Ghana local 10-digit mobile check starting with 0:
+  // MTN: 024, 054, 055, 059, 053
+  // Telecel (Vodafone): 020, 050
+  // AirtelTigo: 027, 057, 026, 056
+  // Glo: 023
+  // Landlines: 030-039
   if (/^0[235]\d{8}$/.test(cleaned)) {
     cleaned = '233' + cleaned.substring(1);
   }
-  // Ghana local 9-digit mobile check without leading zero (e.g. 24xxxxxxx, 54xxxxxxx, 20xxxxxxx, 50xxxxxxx, 27xxxxxxx, etc.)
+  // Ghana local 9-digit without leading 0 (e.g. 20xxxxxxx, 50xxxxxxx, 27xxxxxxx, 57xxxxxxx, 24xxxxxxx, etc.)
   if (/^[235]\d{8}$/.test(cleaned)) {
     cleaned = '233' + cleaned;
   }
@@ -502,31 +507,36 @@ function logSmsActivityAsync(entry: {
   });
 }
 
-// Format registered business name into an Arkesel & telecom compliant GSM Sender ID (max 11 alphanumeric characters)
+// Format registered business name into an Arkesel & telecom compliant GSM Sender ID
+// Strictly alphanumeric [a-zA-Z0-9], NO SPACES (Telecel and AirtelTigo SMPP SMSCs strictly reject spaces), max 11 characters
 function formatSenderIdFromBusinessName(businessName: string, fallback = 'BusinessOS'): string {
   if (!businessName || !businessName.trim()) {
-    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 11) || 'BusinessOS';
+    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
   }
 
-  // Sanitize: allow only alphanumeric characters and single spaces
-  const cleaned = businessName.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!cleaned) {
-    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 11) || 'BusinessOS';
+  // Split into alphanumeric word tokens
+  const words = businessName
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
   }
 
-  // If already <= 11 characters, preserve spaces for clean readability (e.g., "Royal Crown", "Adom Fm")
-  if (cleaned.length <= 11) {
-    return cleaned;
-  }
+  // Capitalize each word into PascalCase and join without spaces (GSM standard for Telecel, AirtelTigo, MTN)
+  let pascal = words
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join('');
 
-  // If longer than 11 characters, try removing spaces to capture the full business brand (e.g. "Travel Trust" -> "TravelTrust")
-  const compact = cleaned.replace(/\s+/g, '');
-  if (compact.length <= 11) {
-    return compact;
+  pascal = pascal.replace(/[^a-zA-Z0-9]/g, '');
+
+  if (!pascal) {
+    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
   }
 
   // Cap at 11 characters strictly per telecom specifications
-  return compact.slice(0, 11);
+  return pascal.slice(0, 11);
 }
 
 // Lightweight in-memory business metadata cache to avoid disk I/O on critical SMS path
@@ -761,22 +771,24 @@ async function dispatchArkeselSms({
 
   const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
 
-  // Determine Sender ID for universal network delivery:
-  // Ghanaian operators (MTN, Telecel, AirtelTigo) mandate pre-approved Sender IDs.
-  // The registered senderId in Arkesel configuration is whitelisted across all networks.
+  // Determine Sender ID for universal multi-network delivery (MTN, Telecel, AirtelTigo):
+  // 1. Telecom regulations mandate strictly alphanumeric sender IDs <= 11 chars with NO SPACES.
+  // 2. User mandate: When SMS receipt is sent to customers, the sender's name MUST be the name of the registered business.
   const registeredApprovedSender = formatSenderIdFromBusinessName(config.senderId || 'BusinessOS');
+  
+  // Resolve the registered business name
   let effectiveSender = registeredApprovedSender;
-
-  // If a specific custom sender is requested and different, we attempt it with automatic fallback
-  if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
+  if (targetBusinessName && targetBusinessName.trim()) {
+    effectiveSender = formatSenderIdFromBusinessName(targetBusinessName, registeredApprovedSender);
+  } else if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
     effectiveSender = formatSenderIdFromBusinessName(senderId, registeredApprovedSender);
   }
 
+  // Build payload: Note that use_case is omitted for Ghana (+233) traffic per Arkesel telecom routing specifications
   const payload: any = {
     sender: effectiveSender,
     message: trimmedMessage,
-    recipients: cleanedRecipients,
-    use_case: 'transactional'
+    recipients: cleanedRecipients
   };
 
   const arkeselRequestStartTime = Date.now();
@@ -809,11 +821,28 @@ async function dispatchArkeselSms({
 
     let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
 
-    // Multi-network recovery: If custom sender ID failed due to telecom whitelist restrictions,
-    // immediately retry once with the registered approved Sender ID for guaranteed multi-network delivery!
-    if (!response.ok && effectiveSender !== registeredApprovedSender && 
-        (lowerMsg.includes('sender') || lowerMsg.includes('unauthorized') || lowerMsg.includes('not approved') || lowerMsg.includes('whitelist') || response.status === 400 || response.status === 422)) {
-      console.warn(`[Arkesel Multi-Network Fallback] Custom sender "${effectiveSender}" was rejected by telecom gateway. Retrying with approved sender "${registeredApprovedSender}" to guarantee delivery to all networks.`);
+    // Multi-network recovery: If custom business name sender ID failed or was rejected by telecom network rules,
+    // immediately retry once with the registered approved Sender ID to guarantee delivery to all networks (Telecel, AirtelTigo, MTN)!
+    const isPrimaryFailed = 
+      !response.ok || 
+      data?.status === 'error' || 
+      data?.status === 'failed' || 
+      (data?.code && data?.code !== 1000 && data?.code !== '1000' && !lowerMsg.includes('successfully submitted'));
+
+    const isSenderOrNetworkIssue = 
+      lowerMsg.includes('sender') || 
+      lowerMsg.includes('unauthorized') || 
+      lowerMsg.includes('not approved') || 
+      lowerMsg.includes('whitelist') || 
+      lowerMsg.includes('not permitted') ||
+      lowerMsg.includes('route') ||
+      lowerMsg.includes('network') ||
+      lowerMsg.includes('rejected') ||
+      response.status === 400 || 
+      response.status === 422;
+
+    if (isPrimaryFailed && effectiveSender !== registeredApprovedSender && isSenderOrNetworkIssue) {
+      console.warn(`[Arkesel Multi-Network Fallback] Primary sender "${effectiveSender}" was rejected by telecom operator. Retrying immediately with registered approved sender "${registeredApprovedSender}" across all networks.`);
       effectiveSender = registeredApprovedSender;
       payload.sender = registeredApprovedSender;
 
@@ -1540,6 +1569,7 @@ app.post('/api/admin/sms/test', async (req, res) => {
       message: testMessage,
       businessId: businessId || 'platform',
       businessName: regName,
+      senderId: regName,
       type: 'test_sms',
       clientTriggerTime: Number(clientTriggerTime) || undefined
     });

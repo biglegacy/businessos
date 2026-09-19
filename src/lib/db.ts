@@ -3242,6 +3242,7 @@ class CloudDatabase {
           ...payload, 
           businessId: resolvedBusinessId,
           businessName: resolvedBusinessName,
+          senderId: payload.senderId || resolvedBusinessName,
           clientTriggerTime: triggerTime 
         })
       });
