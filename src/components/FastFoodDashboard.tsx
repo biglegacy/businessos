@@ -209,32 +209,32 @@ export const FastFoodDashboard: React.FC<FastFoodDashboardProps> = ({ business, 
 
         {/* PAYMENT METHOD BREAKDOWN SUB-CARDS */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs flex items-center justify-between">
             <div className="space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cash Sales Today</span>
-              <div className="text-lg font-black text-white">{formatCurrency(cashSales, currency)}</div>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cash Sales Today</span>
+              <div className="text-lg font-black text-slate-900">{formatCurrency(cashSales, currency)}</div>
             </div>
-            <div className="p-3 bg-slate-800 text-emerald-400 rounded-xl border border-slate-700">
+            <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100">
               <DollarSign className="h-5 w-5" />
             </div>
           </div>
 
-          <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs flex items-center justify-between">
             <div className="space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Mobile Money Sales Today</span>
-              <div className="text-lg font-black text-amber-400">{formatCurrency(momoSales, currency)}</div>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Mobile Money Sales Today</span>
+              <div className="text-lg font-black text-amber-700">{formatCurrency(momoSales, currency)}</div>
             </div>
-            <div className="p-3 bg-slate-800 text-amber-400 rounded-xl border border-slate-700">
+            <div className="p-3 bg-amber-50 text-amber-700 rounded-xl border border-amber-100">
               <Smartphone className="h-5 w-5" />
             </div>
           </div>
 
-          <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-sm flex items-center justify-between">
+          <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs flex items-center justify-between">
             <div className="space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Card Sales Today</span>
-              <div className="text-lg font-black text-cyan-400">{formatCurrency(cardSales, currency)}</div>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Card Sales Today</span>
+              <div className="text-lg font-black text-blue-700">{formatCurrency(cardSales, currency)}</div>
             </div>
-            <div className="p-3 bg-slate-800 text-cyan-400 rounded-xl border border-slate-700">
+            <div className="p-3 bg-blue-50 text-blue-700 rounded-xl border border-blue-100">
               <CreditCard className="h-5 w-5" />
             </div>
           </div>
@@ -363,10 +363,10 @@ export const FastFoodDashboard: React.FC<FastFoodDashboardProps> = ({ business, 
             <span className="text-[10px] text-rose-700 block font-medium">Critically empty</span>
           </div>
 
-          <div className="bg-slate-900 text-white p-5 rounded-2xl space-y-1 shadow-sm">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Raw Food Cost Valuation</span>
-            <div className="text-2xl font-black text-emerald-400">{formatCurrency(foodCostValuation, currency)}</div>
-            <span className="text-[10px] text-slate-400 block font-medium">In raw stock inventory</span>
+          <div className="bg-white border border-emerald-200/80 p-5 rounded-2xl space-y-1 shadow-xs">
+            <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Total Raw Food Cost Valuation</span>
+            <div className="text-2xl font-black text-emerald-700">{formatCurrency(foodCostValuation, currency)}</div>
+            <span className="text-[10px] text-slate-500 block font-medium">In raw stock inventory</span>
           </div>
         </div>
       </div>

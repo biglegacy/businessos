@@ -1,4 +1,4 @@
-const CACHE_NAME = 'businessos-cache-v4';
+const CACHE_NAME = 'businessos-cache-v5';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -58,12 +58,14 @@ self.addEventListener('fetch', (event) => {
 
   const requestUrl = new URL(event.request.url);
 
-  // Exclude API calls and Firebase backend queries from service worker interception
+  // Exclude API calls, Firebase services, Google APIs, and external integrations from service worker interception
   if (
     requestUrl.pathname.startsWith('/api/') ||
-    requestUrl.hostname.includes('firestore.googleapis.com') ||
-    requestUrl.hostname.includes('identitytoolkit.googleapis.com') ||
-    requestUrl.hostname.includes('securetoken.googleapis.com')
+    requestUrl.hostname.includes('googleapis.com') ||
+    requestUrl.hostname.includes('firebaseapp.com') ||
+    requestUrl.hostname.includes('google.com') ||
+    requestUrl.hostname.includes('gstatic.com') ||
+    requestUrl.hostname.includes('arkesel.com')
   ) {
     return;
   }

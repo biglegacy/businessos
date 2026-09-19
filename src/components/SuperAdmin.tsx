@@ -181,12 +181,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [togglingSmsBusId, setTogglingSmsBusId] = useState<string | null>(null);
   const [selectedBusinessIds, setSelectedBusinessIds] = useState<string[]>([]);
   const [isBulkTogglingSms, setIsBulkTogglingSms] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [isGlobalSmsToggling, setIsGlobalSmsToggling] = useState(false);
   const [bulkSmsFeedback, setBulkSmsFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleToggleBusinessSms = async (busId: string, currentStatus: boolean) => {
     setTogglingSmsBusId(busId);
+    const newStatus = !currentStatus;
+    setFirestoreBusinesses(prev => prev.map(b => b.id === busId ? { ...b, smsEnabled: newStatus } : b));
     try {
-      const newStatus = !currentStatus;
       await db.toggleBusinessSms(busId, newStatus);
       const fresh = await db.fetchBusinessesFromFirestore();
       if (fresh && fresh.length > 0) {
@@ -200,10 +204,30 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     }
   };
 
+  const handleSetBusinessSms = async (busId: string, enable: boolean) => {
+    setTogglingSmsBusId(busId);
+    // Instant optimistic update
+    setFirestoreBusinesses(prev => prev.map(b => b.id === busId ? { ...b, smsEnabled: enable } : b));
+    try {
+      await db.toggleBusinessSms(busId, enable);
+      const fresh = await db.fetchBusinessesFromFirestore();
+      if (fresh && fresh.length > 0) {
+        setFirestoreBusinesses(fresh);
+      }
+      forceUpdate();
+    } catch (e) {
+      console.warn('Error setting business SMS:', e);
+    } finally {
+      setTogglingSmsBusId(null);
+    }
+  };
+
   const handleBulkToggleSms = async (enable: boolean) => {
     if (selectedBusinessIds.length === 0) return;
     setIsBulkTogglingSms(true);
     setBulkSmsFeedback(null);
+    // Instant optimistic update
+    setFirestoreBusinesses(prev => prev.map(b => selectedBusinessIds.includes(b.id) ? { ...b, smsEnabled: enable } : b));
     try {
       const res = await db.toggleBulkBusinessSms(selectedBusinessIds, enable);
       const fresh = await db.fetchBusinessesFromFirestore();
@@ -226,6 +250,78 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       });
     } finally {
       setIsBulkTogglingSms(false);
+    }
+  };
+
+  const executeBulkDelete = async () => {
+    if (selectedBusinessIds.length === 0 || isBulkDeleting) return;
+    setIsBulkDeleting(true);
+    const idsToDelete = [...selectedBusinessIds];
+    setIsBulkDeleteModalOpen(false);
+
+    // Instant optimistic removal from UI
+    setFirestoreBusinesses(prev => prev.filter(b => !idsToDelete.includes(b.id)));
+    setSelectedBusinessIds([]);
+
+    try {
+      const currentUser = db.getCurrentUser() || { id: 'superadmin', email: 'admin@businessos.com', name: 'Super Admin' };
+      const res = await db.bulkDeleteBusinesses(idsToDelete, currentUser);
+
+      const fresh = await db.fetchBusinessesFromFirestore();
+      setFirestoreBusinesses(fresh);
+      setBulkSmsFeedback({
+        type: 'success',
+        text: `Successfully deleted ${res.deletedCount} business${res.deletedCount === 1 ? '' : 'es'} from the database.`
+      });
+      forceUpdate();
+      setTimeout(() => setBulkSmsFeedback(null), 6000);
+    } catch (err: any) {
+      console.error('Bulk deletion error:', err);
+      // Revert if error
+      const fresh = await db.fetchBusinessesFromFirestore();
+      setFirestoreBusinesses(fresh);
+      setBulkSmsFeedback({
+        type: 'error',
+        text: `Bulk deletion error: ${err?.message || 'Failed to delete selected businesses.'}`
+      });
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  const handleBulkDeleteBusinesses = () => {
+    if (selectedBusinessIds.length === 0 || isBulkDeleting) return;
+    setIsBulkDeleteModalOpen(true);
+  };
+
+  const handleGlobalToggleSms = async (enable: boolean) => {
+    if (isGlobalSmsToggling) return;
+    const actionText = enable ? 'ENABLE' : 'DISABLE';
+    const confirmMsg = `Are you sure you want to ${actionText} SMS messaging for ALL registered businesses? This setting saves to the database and takes effect immediately for all POS terminals.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsGlobalSmsToggling(true);
+    setBulkSmsFeedback(null);
+    try {
+      const res = await db.toggleAllBusinessesSms(enable);
+      const fresh = await db.fetchBusinessesFromFirestore();
+      if (fresh && fresh.length > 0) {
+        setFirestoreBusinesses(fresh);
+      }
+      forceUpdate();
+      setBulkSmsFeedback({
+        type: 'success',
+        text: `Successfully ${enable ? 'ENABLED' : 'DISABLED'} SMS for all ${res.updatedCount} registered businesses.`
+      });
+      setTimeout(() => setBulkSmsFeedback(null), 6000);
+    } catch (err: any) {
+      console.error('Global SMS toggle error:', err);
+      setBulkSmsFeedback({
+        type: 'error',
+        text: `Failed to update global SMS setting: ${err?.message || 'Error'}`
+      });
+    } finally {
+      setIsGlobalSmsToggling(false);
     }
   };
 
@@ -870,10 +966,6 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
   const executeDeleteBusiness = async () => {
     if (!deletingBusinessTarget || isDeletingInProgress) return;
-    if (deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS') {
-      setDeleteErrorMessage('Please type "DELETE BUSINESS" exactly into the confirmation field.');
-      return;
-    }
 
     const target = deletingBusinessTarget;
     const busId = target.id;
@@ -881,6 +973,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
     setIsDeletingInProgress(true);
     setDeleteErrorMessage(null);
+
+    // Instant optimistic update for immediate feedback
+    setFirestoreBusinesses(prev => prev.filter(b => b.id !== busId));
+    if (viewingBusiness?.id === busId) {
+      setViewingBusiness(null);
+    }
 
     try {
       // 1. Purge via db.deleteBusinessPermanent (handles Firestore doc + subcollections + tombstone + backend call)
@@ -899,10 +997,6 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       const freshBusinesses = await db.fetchBusinessesFromFirestore();
       setFirestoreBusinesses(freshBusinesses);
 
-      // 4. Update UI state
-      if (viewingBusiness?.id === busId) {
-        setViewingBusiness(null);
-      }
       setDeletingBusinessTarget(null);
       setDeleteConfirmInput('');
       setDeleteSuccessMessage(`Business / School "${busName}" and all associated database records have been permanently deleted.`);
@@ -910,6 +1004,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       forceUpdate();
     } catch (err: any) {
       console.error('Delete business error:', err);
+      // If failed, keep the affected business visible and show clear error message
+      const freshBusinesses = await db.fetchBusinessesFromFirestore();
+      setFirestoreBusinesses(freshBusinesses);
       const msg = err?.message || 'Business deletion failed. Please try again.';
       setDeleteErrorMessage(msg);
     } finally {
@@ -1120,12 +1217,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     <>
       <div className="p-6 border-b border-slate-200 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-xs shadow-blue-500/20">
+          <div className="h-10 w-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-xl shadow-xs shadow-emerald-500/20">
             S
           </div>
           <div>
             <h1 className="font-extrabold text-slate-900 text-base tracking-tight leading-none">SuperAdmin</h1>
-            <span className="text-[10px] text-blue-600 uppercase tracking-wider font-bold">BOS Global Control</span>
+            <span className="text-[10px] text-emerald-700 uppercase tracking-wider font-bold">BOS Global Control</span>
           </div>
         </div>
         <button
@@ -1140,7 +1237,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('businesses'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'businesses' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'businesses' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Building className="h-4 w-4 text-current" /> Businesses &amp; Schools
@@ -1149,7 +1246,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('pricing'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'pricing' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'pricing' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <DollarSign className="h-4 w-4 text-current" /> Pricing Management
@@ -1158,7 +1255,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('popups'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'popups' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'popups' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Sparkles className="h-4 w-4 text-current" /> Popup Prompts (5-30d)
@@ -1167,7 +1264,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('paynow'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'paynow' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'paynow' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <CreditCard className="h-4 w-4 text-current" /> Paystack API Settings
@@ -1177,7 +1274,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
           id="nav-superadmin-sms"
           onClick={() => { setActiveTab('sms'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'sms' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'sms' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <MessageSquare className="h-4 w-4 text-current" /> SMS / Arkesel
@@ -1186,7 +1283,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('users'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'users' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'users' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Users className="h-4 w-4 text-current" /> Global User Directory
@@ -1195,7 +1292,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('notifications'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'notifications' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'notifications' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Bell className="h-4 w-4 text-current" /> Push Notifications
@@ -1204,7 +1301,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('registration'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'registration' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'registration' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Globe className="h-4 w-4 text-current" /> Registration Control
@@ -1213,7 +1310,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('system'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'system' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'system' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Settings className="h-4 w-4 text-current" /> System Configuration
@@ -1222,7 +1319,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('cloud'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'cloud' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'cloud' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Database className="h-4 w-4 text-current" /> Cloud &amp; Storage
@@ -1231,7 +1328,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('monitoring'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'monitoring' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'monitoring' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Activity className="h-4 w-4 text-current" /> Platform Monitoring
@@ -1240,7 +1337,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <button
           onClick={() => { setActiveTab('features'); setSearchTerm(''); setIsMobileNavOpen(false); }}
           className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition cursor-pointer min-h-[44px] ${
-            activeTab === 'features' ? 'bg-blue-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+            activeTab === 'features' ? 'bg-emerald-600 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
           }`}
         >
           <Sliders className="h-4 w-4 text-current" /> Feature Gates
@@ -1435,7 +1532,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   <button
                     onClick={() => setBizCategoryFilter('all')}
                     className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 min-h-[38px] ${
-                      bizCategoryFilter === 'all' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      bizCategoryFilter === 'all' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
                     All ({businesses.length})
@@ -1451,7 +1548,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   <button
                     onClick={() => setBizCategoryFilter('other')}
                     className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 min-h-[38px] ${
-                      bizCategoryFilter === 'other' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      bizCategoryFilter === 'other' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
                     Retail &amp; Other ({businesses.filter(b => !b.category?.toLowerCase().includes('school')).length})
@@ -1481,7 +1578,33 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                   </button>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                  {/* Global SMS Controls */}
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                    <button
+                      type="button"
+                      id="btn-global-enable-sms"
+                      disabled={isGlobalSmsToggling}
+                      onClick={() => handleGlobalToggleSms(true)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[36px] bg-white text-emerald-700 hover:bg-emerald-50 border border-slate-200/60 shadow-xs disabled:opacity-50"
+                      title="Enable SMS for all registered businesses in the system"
+                    >
+                      {isGlobalSmsToggling ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />}
+                      <span className="hidden md:inline">Enable SMS All</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-global-disable-sms"
+                      disabled={isGlobalSmsToggling}
+                      onClick={() => handleGlobalToggleSms(false)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[36px] bg-white text-rose-700 hover:bg-rose-50 border border-slate-200/60 shadow-xs disabled:opacity-50"
+                      title="Disable SMS for all registered businesses in the system"
+                    >
+                      {isGlobalSmsToggling ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <MessageSquareOff className="h-3.5 w-3.5 text-rose-600" />}
+                      <span className="hidden md:inline">Disable SMS All</span>
+                    </button>
+                  </div>
+
                   {/* View Mode Switcher: Cards vs Table */}
                   <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
                     <button
@@ -1527,7 +1650,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         {selectedBusinessIds.length} {selectedBusinessIds.length === 1 ? 'Business' : 'Businesses'} Selected
                       </p>
                       <p className="text-[11px] text-blue-700 font-medium">
-                        Enable or disable SMS gateway for all selected businesses at once.
+                        Apply bulk actions across all selected businesses at once.
                       </p>
                     </div>
                   </div>
@@ -1536,7 +1659,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     <button
                       type="button"
                       id="btn-bulk-enable-sms"
-                      disabled={isBulkTogglingSms}
+                      disabled={isBulkTogglingSms || isBulkDeleting}
                       onClick={() => handleBulkToggleSms(true)}
                       className="flex-1 md:flex-initial px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[40px]"
                       title="Enable SMS for all selected businesses"
@@ -1552,7 +1675,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     <button
                       type="button"
                       id="btn-bulk-disable-sms"
-                      disabled={isBulkTogglingSms}
+                      disabled={isBulkTogglingSms || isBulkDeleting}
                       onClick={() => handleBulkToggleSms(false)}
                       className="flex-1 md:flex-initial px-4 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[40px]"
                       title="Disable SMS for all selected businesses"
@@ -1563,6 +1686,22 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         <MessageSquareOff className="h-4 w-4" />
                       )}
                       <span>Disable SMS ({selectedBusinessIds.length})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id="btn-bulk-delete-selected"
+                      disabled={isBulkDeleting || isBulkTogglingSms}
+                      onClick={handleBulkDeleteBusinesses}
+                      className="flex-1 md:flex-initial px-4 py-2.5 bg-rose-800 hover:bg-rose-900 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer min-h-[40px]"
+                      title="Permanently delete all selected businesses"
+                    >
+                      {isBulkDeleting ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                      <span>Delete Selected ({selectedBusinessIds.length})</span>
                     </button>
 
                     <button
@@ -1747,6 +1886,67 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                           </div>
                         </div>
 
+                        {/* DEDICATED BUSINESS-SPECIFIC SMS CONTROLS (Directly attached to each business card) */}
+                        <div id={`sms-controls-${bus.id}`} className="bg-slate-50 border border-slate-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${
+                              bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                            }`}>
+                              {bus.smsEnabled !== false ? <MessageSquare className="h-4 w-4" /> : <MessageSquareOff className="h-4 w-4" />}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-extrabold text-slate-800">SMS Status:</span>
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                  bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                                  {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                {bus.smsEnabled !== false 
+                                  ? 'Automatic SMS receipts & POS messages are active' 
+                                  : 'SMS messaging disabled for this business'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              id={`btn-enable-sms-${bus.id}`}
+                              disabled={togglingSmsBusId === bus.id || bus.smsEnabled !== false}
+                              onClick={() => handleSetBusinessSms(bus.id, true)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer min-h-[36px] ${
+                                bus.smsEnabled !== false
+                                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                              }`}
+                              title={`Enable SMS for ${bus.name}`}
+                            >
+                              {togglingSmsBusId === bus.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                              <span>Enable SMS</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              id={`btn-disable-sms-${bus.id}`}
+                              disabled={togglingSmsBusId === bus.id || bus.smsEnabled === false}
+                              onClick={() => handleSetBusinessSms(bus.id, false)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer min-h-[36px] ${
+                                bus.smsEnabled === false
+                                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                  : 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                              }`}
+                              title={`Disable SMS for ${bus.name}`}
+                            >
+                              {togglingSmsBusId === bus.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                              <span>Disable SMS</span>
+                            </button>
+                          </div>
+                        </div>
+
                         {/* Comprehensive Business Details Grid */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs bg-slate-50/60 p-3.5 rounded-xl border border-slate-100">
                           {/* Owner & Contact */}
@@ -1778,17 +1978,6 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                               Cycle/Expiry: <strong className="text-slate-700 font-mono">{details.formattedNextPay || 'Active'}</strong>
                             </p>
                             <div className="flex items-center gap-2 pt-0.5">
-                              <button
-                                type="button"
-                                onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
-                                disabled={togglingSmsBusId === bus.id}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
-                                  bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                                }`}
-                                title="Toggle SMS Gateway"
-                              >
-                                SMS: {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
-                              </button>
                               <span className="text-[10px] text-slate-400 font-mono">Currency: {bus.currency || 'GHC'}</span>
                             </div>
                           </div>
@@ -1851,6 +2040,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         <th className="py-3.5 px-4">Owner &amp; Contact</th>
                         <th className="py-3.5 px-4">Category &amp; Scale</th>
                         <th className="py-3.5 px-4">Plan &amp; Subscription</th>
+                        <th className="py-3.5 px-4">SMS Status &amp; Controls</th>
                         <th className="py-3.5 px-4">Account Status</th>
                         <th className="py-3.5 px-4">Dates &amp; Activity</th>
                         <th className="py-3.5 px-4 text-center min-w-[360px] bg-slate-100/90 border-l border-slate-200 sticky right-0 z-10 shadow-xs">Super Admin Actions</th>
@@ -1921,19 +2111,53 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                                   {details.priceDisplay}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-2 mt-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleBusinessSms(bus.id, bus.smsEnabled !== false)}
-                                  disabled={togglingSmsBusId === bus.id}
-                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-pointer transition ${
-                                    bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                                  }`}
-                                  title="Toggle SMS Gateway"
-                                >
-                                  SMS: {bus.smsEnabled !== false ? 'ON' : 'OFF'}
-                                </button>
-                                <span className="text-[10px] text-slate-400 font-mono">{bus.currency || 'GHC'}</span>
+                              <div className="mt-1">
+                                <span className="text-[10px] text-slate-400 font-mono">Currency: {bus.currency || 'GHC'}</span>
+                              </div>
+                            </td>
+
+                            {/* 4.5 Dedicated SMS Status & Controls */}
+                            <td className="py-3 px-4">
+                              <div className="space-y-1.5 min-w-[150px]">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] text-slate-400 font-bold uppercase">Status:</span>
+                                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                    bus.smsEnabled !== false ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  }`}>
+                                    <span className={`h-1.5 w-1.5 rounded-full ${bus.smsEnabled !== false ? 'bg-emerald-600' : 'bg-rose-600'}`} />
+                                    {bus.smsEnabled !== false ? 'Enabled' : 'Disabled'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    id={`tbl-enable-sms-${bus.id}`}
+                                    disabled={togglingSmsBusId === bus.id || bus.smsEnabled !== false}
+                                    onClick={() => handleSetBusinessSms(bus.id, true)}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      bus.smsEnabled !== false 
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60' 
+                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                                    }`}
+                                    title="Enable SMS"
+                                  >
+                                    {togglingSmsBusId === bus.id && bus.smsEnabled === false ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Enable'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    id={`tbl-disable-sms-${bus.id}`}
+                                    disabled={togglingSmsBusId === bus.id || bus.smsEnabled === false}
+                                    onClick={() => handleSetBusinessSms(bus.id, false)}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      bus.smsEnabled === false 
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-60' 
+                                        : 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                                    }`}
+                                    title="Disable SMS"
+                                  >
+                                    {togglingSmsBusId === bus.id && bus.smsEnabled !== false ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Disable'}
+                                  </button>
+                                </div>
                               </div>
                             </td>
 
@@ -4311,24 +4535,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </p>
               </div>
 
-              {/* Confirmation Input Field Section */}
-              <div id="delete-confirmation-input-section" className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-2xl space-y-2">
-                <label className="block text-xs font-bold text-slate-800">
-                  Type <span className="font-mono text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300 font-black">DELETE BUSINESS</span> to confirm:
-                </label>
-                <input
-                  type="text"
-                  id="input-confirm-delete-business"
-                  value={deleteConfirmInput}
-                  onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                  placeholder="Type DELETE BUSINESS to confirm"
-                  className="w-full px-3.5 py-2.5 bg-white border-2 border-slate-300 focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-xl text-xs font-bold text-slate-900 outline-none transition"
-                  autoComplete="off"
-                  disabled={isDeletingInProgress}
-                />
-                <p className="text-[10px] text-slate-500 font-medium">
-                  This safety verification prevents accidental deletion through an unintended click.
-                </p>
+              {/* Businesses count indicator */}
+              <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-600">Businesses being deleted:</span>
+                <span className="font-black text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-200">
+                  1 Business
+                </span>
               </div>
 
               {deleteErrorMessage && (
@@ -4349,60 +4561,139 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               )}
             </div>
 
-            {/* Modal Footer: Fixed bottom action buttons with quick scroll toggle */}
-            <div className="flex items-center justify-between px-4 py-3 sm:px-6 sm:py-3.5 border-t border-slate-100 bg-slate-50/90 shrink-0 gap-2">
+            {/* Modal Footer: Action buttons */}
+            <div className="flex items-center justify-end px-4 py-3 sm:px-6 sm:py-3.5 border-t border-slate-100 bg-slate-50/90 shrink-0 gap-2">
               <button
                 type="button"
-                id="btn-scroll-delete-modal-footer"
-                onClick={toggleDeleteModalScroll}
-                className="px-2.5 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer min-h-[38px]"
-                title={deleteModalAtBottom ? "Scroll to top" : "Scroll down to confirm"}
+                id="btn-cancel-delete-biz"
+                disabled={isDeletingInProgress}
+                onClick={() => {
+                  setDeletingBusinessTarget(null);
+                  setDeleteConfirmInput('');
+                  setDeleteErrorMessage(null);
+                }}
+                className="px-4 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[40px]"
               >
-                {deleteModalAtBottom ? (
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-delete-biz"
+                disabled={isDeletingInProgress}
+                onClick={executeDeleteBusiness}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[40px]"
+              >
+                {isDeletingInProgress ? (
                   <>
-                    <ChevronUp className="h-3.5 w-3.5" />
-                    <span>Back to Top</span>
+                    <RefreshCw className="h-4 w-4 animate-spin" /> Deleting...
                   </>
                 ) : (
                   <>
-                    <ChevronDown className="h-3.5 w-3.5" />
-                    <span>Scroll Down</span>
+                    <Trash2 className="h-4 w-4" /> Delete Permanently
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  id="btn-cancel-delete-biz"
-                  disabled={isDeletingInProgress}
-                  onClick={() => {
-                    setDeletingBusinessTarget(null);
-                    setDeleteConfirmInput('');
-                    setDeleteErrorMessage(null);
-                  }}
-                  className="px-3.5 py-2 sm:px-4 sm:py-2.5 bg-white hover:bg-slate-100 border border-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer min-h-[40px]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  id="btn-confirm-delete-biz"
-                  disabled={deleteConfirmInput.trim().toUpperCase() !== 'DELETE BUSINESS' || isDeletingInProgress}
-                  onClick={executeDeleteBusiness}
-                  className="px-4 py-2 sm:px-5 sm:py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 cursor-pointer transition min-h-[40px]"
-                >
-                  {isDeletingInProgress ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 animate-spin" /> Deleting...
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="h-4 w-4" /> Delete Permanently
-                    </>
-                  )}
-                </button>
+      {/* BULK DELETE CONFIRMATION DIALOG */}
+      {isBulkDeleteModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-delete-modal-title"
+        >
+          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full shadow-2xl border border-rose-200 overflow-hidden my-auto flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-white">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 id="bulk-delete-modal-title" className="font-extrabold text-slate-900 text-base">
+                    Delete Multiple Businesses?
+                  </h3>
+                  <p className="text-[11px] text-rose-600 font-semibold">Permanent Database Deletion</p>
+                </div>
               </div>
+              {!isBulkDeleting && (
+                <button
+                  type="button"
+                  onClick={() => setIsBulkDeleteModalOpen(false)}
+                  className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 text-xs overflow-y-auto">
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 flex items-start gap-2.5">
+                <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">
+                    This will permanently delete {selectedBusinessIds.length} selected businesses and all associated records.
+                  </p>
+                  <p className="text-[11px] text-rose-700 mt-1">
+                    This action cannot be undone. All tenant data, products, orders, inventory, and users will be purged from the database.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                <span className="font-semibold text-slate-700">Total businesses being deleted:</span>
+                <span className="font-black text-rose-700 bg-rose-100 px-3 py-1 rounded-lg text-sm border border-rose-200">
+                  {selectedBusinessIds.length} Businesses
+                </span>
+              </div>
+
+              {/* List of affected businesses */}
+              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50 max-h-40 overflow-y-auto space-y-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Selected Businesses:</p>
+                {selectedBusinessIds.map(id => {
+                  const b = businesses.find(item => item.id === id);
+                  return (
+                    <div key={id} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-b-0">
+                      <span className="font-bold text-slate-800">{b?.name || id}</span>
+                      <span className="font-mono text-[10px] text-slate-500">{id}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end px-5 py-3.5 border-t border-slate-100 bg-slate-50 gap-2">
+              <button
+                type="button"
+                disabled={isBulkDeleting}
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 font-bold rounded-xl text-xs text-slate-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-bulk-delete"
+                disabled={isBulkDeleting}
+                onClick={executeBulkDelete}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold rounded-xl text-xs shadow-md shadow-rose-900/20 flex items-center gap-1.5 transition"
+              >
+                {isBulkDeleting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" /> Deleting {selectedBusinessIds.length} Businesses...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" /> Delete {selectedBusinessIds.length} Businesses Permanently
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

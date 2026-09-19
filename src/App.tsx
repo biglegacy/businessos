@@ -51,7 +51,10 @@ import { requestNotificationPermission } from './lib/pushNotifications';
 // Laundry Module Components
 import { LaundryDashboard } from './components/LaundryDashboard';
 import { LaundryOrders } from './components/LaundryOrders';
-import { MobileScanner } from './components/MobileScanner';
+
+// Beauty & Cosmetics Dashboard & Products
+import { BeautyCosmeticsDashboard } from './components/BeautyCosmeticsDashboard';
+import { BeautyProducts } from './components/BeautyProducts';
 
 // Salon Module Components
 import { SalonDashboard } from './components/SalonDashboard';
@@ -79,6 +82,9 @@ import { TravelMarketingCampaigns } from './components/travel/TravelMarketing';
 // Pharmacy Module Components
 import { PharmacyDashboard } from './components/PharmacyDashboard';
 import { PharmacyPOS } from './components/PharmacyPOS';
+import { PharmacyMedicines } from './components/PharmacyMedicines';
+import { PharmacyPrescriptions } from './components/PharmacyPrescriptions';
+import { PharmacyExpiryTracking } from './components/PharmacyExpiryTracking';
 
 // Service Business Module Components
 import { ServiceBusinessDashboard } from './components/ServiceBusinessDashboard';
@@ -101,8 +107,6 @@ import {
 import { exportSalesToCSV } from './lib/csvExport';
 
 export default function App() {
-  const isScannerRoute = window.location.pathname.startsWith('/scanner/') || window.location.pathname.startsWith('/mobile-scanner/');
-
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeBusinessState, setActiveBusinessState] = useState<Business | null>(null);
   const [adminActiveBusiness, setAdminActiveBusiness] = useState<Business | null>(null);
@@ -169,6 +173,7 @@ export default function App() {
   const [salesSearch, setSalesSearch] = useState('');
   const [salesFilterEmp, setSalesFilterEmp] = useState('All');
   const [salesFilterPay, setSalesFilterPay] = useState('All');
+  const [salesFilterSms, setSalesFilterSms] = useState('All');
 
   const handleResendSmsReceipt = async (sale: Sale) => {
     const phone = resendSmsPhone.trim() || sale.customerPhone;
@@ -193,8 +198,14 @@ export default function App() {
 
       if (res.success) {
         setResendSmsStatus({ success: true, message: `Receipt SMS successfully resent to ${phone}.` });
+        const updatedSale: Sale = { ...sale, customerPhone: phone, smsStatus: 'Sent', smsStatusDetail: `Resent to ${phone}` };
+        db.saveSale(activeBusiness?.id || sale.businessId, updatedSale);
+        triggerReload();
       } else {
         setResendSmsStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
+        const updatedSale: Sale = { ...sale, customerPhone: phone, smsStatus: 'Failed', smsStatusDetail: res.message || 'Resend failed' };
+        db.saveSale(activeBusiness?.id || sale.businessId, updatedSale);
+        triggerReload();
       }
     } catch (err: any) {
       setResendSmsStatus({ success: false, message: err?.message || 'Network error resending SMS.' });
@@ -1130,10 +1141,6 @@ export default function App() {
     return tabs;
   };
 
-  if (isScannerRoute) {
-    return <MobileScanner />;
-  }
-
   if (!currentUser) {
     return <AuthPortal onLoginSuccess={handleLoginSuccess} />;
   }
@@ -1178,6 +1185,9 @@ export default function App() {
   const isLaundry = currentArchetype === 'laundry';
   const isPharmacy = currentArchetype === 'pharmacy';
   const isServiceBusiness = currentArchetype === 'service';
+  const isBeautyCosmetics = activeBusiness?.category === 'Beauty & Cosmetics' || 
+    activeBusiness?.category === 'Beauty & Personal Care' || 
+    activeBusiness?.category === 'Cosmetics';
 
   const SIDEBAR_ITEMS = isTravel ? [
     { name: 'Dashboard', icon: LayoutDashboard },
@@ -1307,10 +1317,16 @@ export default function App() {
   // Filtered Sales listing
   const filteredSalesHistory = businessSalesRaw.filter(sale => {
     const matchSearch = sale.id.toLowerCase().includes(salesSearch.toLowerCase()) ||
-                        (sale.customerName && sale.customerName.toLowerCase().includes(salesSearch.toLowerCase()));
+                        (sale.customerName && sale.customerName.toLowerCase().includes(salesSearch.toLowerCase())) ||
+                        (sale.customerPhone && sale.customerPhone.includes(salesSearch));
     const matchEmp = salesFilterEmp === 'All' || sale.employeeId === salesFilterEmp;
     const matchPay = salesFilterPay === 'All' || sale.paymentMethod === salesFilterPay;
-    return matchSearch && matchEmp && matchPay;
+    const matchSms = salesFilterSms === 'All' || 
+      (salesFilterSms === 'Sent' && sale.smsStatus === 'Sent') ||
+      (salesFilterSms === 'Failed' && sale.smsStatus === 'Failed') ||
+      (salesFilterSms === 'Pending' && sale.smsStatus === 'Pending') ||
+      (salesFilterSms === 'Skipped' && (!sale.smsStatus || sale.smsStatus.startsWith('Skipped')));
+    return matchSearch && matchEmp && matchPay && matchSms;
   }).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Inventory Stock Adjustment triggers
@@ -1458,13 +1474,13 @@ export default function App() {
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-xs text-white font-extrabold text-xl shrink-0">
+              <div className="w-10 h-10 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-xl flex items-center justify-center shadow-xs text-white font-extrabold text-xl shrink-0">
                 {activeBusiness.name.charAt(0)}
               </div>
             )}
             <div className="min-w-0">
               <h1 className="font-bold text-slate-900 text-base tracking-tight leading-none truncate">{activeBusiness.name}</h1>
-              <span className="text-[10px] text-blue-600 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
+              <span className="text-[10px] text-emerald-700 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
             </div>
           </div>
 
@@ -1493,8 +1509,8 @@ export default function App() {
                 }}
                 className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 text-sm font-medium transition-colors cursor-pointer ${
                   activeTab === item.name 
-                    ? 'bg-blue-600 text-white rounded-xl shadow-xs font-semibold' 
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-xl transition-colors'
+                    ? 'bg-emerald-600 text-white rounded-xl shadow-xs font-semibold' 
+                    : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-800 rounded-xl transition-colors'
                 }`}
               >
                 <IconComp className="h-5 w-5 text-current" />
@@ -1512,15 +1528,15 @@ export default function App() {
                 setAdminActiveBusiness(null);
                 setActiveTab('Dashboard');
               }}
-              className="w-full text-left px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl flex items-center gap-3 text-xs font-bold transition-colors border border-blue-200 shadow-xs cursor-pointer"
+              className="w-full text-left px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl flex items-center gap-3 text-xs font-bold transition-colors border border-emerald-200 shadow-xs cursor-pointer"
             >
-              <Shield className="h-4 w-4 text-blue-600" />
+              <Shield className="h-4 w-4 text-emerald-600" />
               <span>Admin Panel</span>
             </button>
           )}
 
           <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-            <div className="text-[10px] uppercase tracking-widest text-blue-600 font-bold mb-1">Tenant ID</div>
+            <div className="text-[10px] uppercase tracking-widest text-emerald-700 font-bold mb-1">Tenant ID</div>
             <div className="text-xs text-slate-800 font-mono font-semibold truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
             <div className="pt-1">
               <InstallAppButton variant="sidebar" />
@@ -1530,7 +1546,7 @@ export default function App() {
           <div className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs border border-slate-200">
             <div className="truncate pr-2">
               <p className="font-semibold text-slate-900 truncate leading-snug">{currentUser.name}</p>
-              <span className="text-[9px] text-blue-600 font-bold uppercase block mt-0.5">{currentUser.role}</span>
+              <span className="text-[9px] text-emerald-700 font-bold uppercase block mt-0.5">{currentUser.role}</span>
             </div>
             <button
               onClick={handleLogout}
@@ -1725,7 +1741,19 @@ export default function App() {
           })()}
 
           {activeTab === 'Dashboard' && (
-            isTravel ? (
+            isBeautyCosmetics ? (
+              <BeautyCosmeticsDashboard 
+                business={activeBusiness} 
+                user={currentUser} 
+                onNavigate={(tab) => {
+                  if (authorizedTabs.includes(tab)) {
+                    setActiveTab(tab);
+                  } else {
+                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                  }
+                }}
+              />
+            ) : isTravel ? (
               <TravelDashboard 
                 business={activeBusiness} 
                 user={currentUser} 
@@ -1976,7 +2004,36 @@ export default function App() {
             />
           )}
 
-          {(activeTab === 'Products' || activeTab === 'Services') && (
+          {((activeTab === 'Products' || activeTab === 'Medicines' || activeTab === 'Medicines & Products') && isPharmacy) && (
+            <PharmacyMedicines 
+              business={activeBusiness} 
+              user={currentUser} 
+            />
+          )}
+
+          {(activeTab === 'Prescriptions' && isPharmacy) && (
+            <PharmacyPrescriptions 
+              business={activeBusiness} 
+              user={currentUser} 
+              onNavigatePOS={() => setActiveTab('POS')}
+            />
+          )}
+
+          {(activeTab === 'Expiry Tracking' && isPharmacy) && (
+            <PharmacyExpiryTracking 
+              business={activeBusiness} 
+              onNavigateMedicines={() => setActiveTab('Medicines & Products')}
+            />
+          )}
+
+          {(activeTab === 'Products' && isBeautyCosmetics) && (
+            <BeautyProducts 
+              business={activeBusiness} 
+              onNavigatePOS={() => setActiveTab('POS')}
+            />
+          )}
+
+          {(!isPharmacy && (!isBeautyCosmetics || activeTab === 'Services') && (activeTab === 'Products' || activeTab === 'Services')) && (
             <Products 
               business={activeBusiness} 
               user={currentUser} 
@@ -2257,7 +2314,7 @@ export default function App() {
               </div>
 
               {/* Advanced search / filters bar */}
-              <header className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm shrink-0 text-xs">
+              <header className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-white p-4 rounded-2xl border border-slate-200/60 shadow-sm shrink-0 text-xs">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Search Tickets</label>
                   <div className="relative">
@@ -2302,6 +2359,21 @@ export default function App() {
                     <option value="other">Store balance / credit tabs</option>
                   </select>
                 </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">SMS Receipt</label>
+                  <select
+                    value={salesFilterSms}
+                    onChange={(e) => setSalesFilterSms(e.target.value)}
+                    className="w-full py-1.5 px-2.5 border border-slate-200 bg-white rounded-lg text-slate-700 text-xs"
+                  >
+                    <option value="All">All SMS Statuses</option>
+                    <option value="Sent">Delivered / Sent</option>
+                    <option value="Failed">Failed Delivery</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Skipped">Skipped / No Phone</option>
+                  </select>
+                </div>
               </header>
 
               {/* Mobile Transactions Cards (< md) */}
@@ -2315,17 +2387,32 @@ export default function App() {
                           <span className="font-mono text-xs font-bold text-slate-700">{sale.id}</span>
                           <p className="text-[11px] text-slate-400 mt-0.5">{new Date(sale.createdAt).toLocaleString()}</p>
                         </div>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                          isRefunded ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                        }`}>
-                          {isRefunded ? 'Refunded' : 'Completed'}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {sale.smsStatus === 'Sent' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200" title={sale.smsStatusDetail || 'SMS Sent'}>
+                              SMS ✓
+                            </span>
+                          )}
+                          {sale.smsStatus === 'Failed' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200" title={sale.smsStatusDetail || 'SMS Failed'}>
+                              SMS ✕
+                            </span>
+                          )}
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                            isRefunded ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                          }`}>
+                            {isRefunded ? 'Refunded' : 'Completed'}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="flex items-center justify-between text-xs py-2 border-t border-b border-slate-100">
                         <div className="space-y-0.5">
                           <p className="font-bold text-slate-800">{sale.customerName || 'Walk-in Customer'}</p>
                           <p className="text-[10px] text-slate-400">Cashier: {sale.employeeName}</p>
+                          {sale.customerPhone && (
+                            <p className="text-[10px] text-slate-400">Phone: {sale.customerPhone}</p>
+                          )}
                         </div>
                         <div className="text-right">
                           <span className="inline-block px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[10px] font-bold uppercase">
@@ -2391,6 +2478,7 @@ export default function App() {
                       <th className="py-4 px-6">Cashier Staff</th>
                       <th className="py-4 px-6">Payment Method</th>
                       <th className="py-4 px-6 font-black">Gross Total</th>
+                      <th className="py-4 px-6">SMS Status</th>
                       <th className="py-4 px-6">Status</th>
                       <th className="py-4 px-6 text-right">Invoice actions</th>
                     </tr>
@@ -2407,6 +2495,25 @@ export default function App() {
                           <td className="py-4 px-6 uppercase font-bold text-slate-600">{sale.paymentMethod}</td>
                           <td className={`py-4 px-6 font-black ${isRefunded ? 'text-slate-400 line-through' : 'text-emerald-800'}`}>
                             ${sale.total.toFixed(2)}
+                          </td>
+                          <td className="py-4 px-6">
+                            {sale.smsStatus === 'Sent' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200" title={sale.smsStatusDetail || `SMS delivered to ${sale.customerPhone || 'customer'}`}>
+                                ✓ Sent
+                              </span>
+                            ) : sale.smsStatus === 'Failed' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200" title={sale.smsStatusDetail || 'Delivery failed'}>
+                                ✕ Failed
+                              </span>
+                            ) : sale.smsStatus === 'Pending' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-700 border border-amber-200">
+                                ⟳ Pending
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-500 border border-slate-200" title="No phone number provided or SMS disabled">
+                                — Skipped
+                              </span>
+                            )}
                           </td>
                           <td className="py-4 px-6">
                             <span className={`inline-block px-2.5 py-0.5 rounded font-extrabold ${
@@ -2454,7 +2561,7 @@ export default function App() {
                     })}
                     {filteredSalesHistory.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="py-12 text-center text-slate-400">
+                        <td colSpan={9} className="py-12 text-center text-slate-400">
                           No transaction receipts recorded under current isolated filters.
                         </td>
                       </tr>

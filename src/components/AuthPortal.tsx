@@ -5,8 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db';
-import { auth } from '../lib/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+
 import { User, Business, REQUIRED_BUSINESS_TYPES, BUSINESS_TYPE_GROUPS } from '../types';
 import { showSuccess, showError } from '../lib/toast';
 import { InstallAppButton } from './InstallAppButton';
@@ -260,12 +259,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
         return;
       }
 
-      // Firebase Auth Cloud Sign-in Attempt
-      try {
-        await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      } catch (authErr) {
-        console.info('Firebase Auth sign in note:', authErr);
-      }
+
 
       db.setCurrentUser(matchedUser);
       db.addActivityLog(matchedUser.businessId, {
@@ -365,12 +359,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
     db.saveBusiness(newBusiness);
     db.saveUser(newOwner);
 
-    // Register user in Firebase Authentication
-    try {
-      await createUserWithEmailAndPassword(auth, trimmedRegEmail, regPassword);
-    } catch (authErr) {
-      console.info('Firebase Auth cloud user creation note:', authErr);
-    }
+
 
     // Initial log
     db.addActivityLog(businessId, {

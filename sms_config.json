@@ -3,8 +3,8 @@
   "senderId": "BusinessOS",
   "apiEndpoint": "https://sms.arkesel.com/api/v2/sms/send",
   "isEnabled": true,
-  "lastTestedAt": "2026-09-16T09:05:12.289Z",
+  "totalSentCount": 0,
+  "lastTestedAt": "2026-09-18T08:36:16.144Z",
   "lastTestStatus": "Active & Connected",
-  "lastTestMessage": "Successfully Submitted",
-  "totalSentCount": 1
+  "lastTestMessage": "Connection verified. Balance: 589"
 }

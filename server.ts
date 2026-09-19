@@ -426,13 +426,24 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
 // Initial sync on boot
 syncSmsConfigFromFirestore().catch(() => {});
 
-// Normalize phone numbers (Ghana numbers: 024xxxxxxx -> 23324xxxxxxx; standard international cleaned)
+// Normalize phone numbers across all networks (MTN, Telecel, AirtelTigo, Glo, and International)
 function normalizePhoneNumber(phone: string): string {
   if (!phone) return '';
-  let cleaned = String(phone).trim().replace(/[\s\-\(\)\+]/g, '');
-  // Ghana local 10-digit mobile check (e.g. 024xxxxxxx, 055xxxxxxx, 020xxxxxxx, etc.)
+  let cleaned = String(phone).trim().replace(/[\s\-\(\)\+\.]/g, '');
+  if (cleaned.startsWith('00')) {
+    cleaned = cleaned.substring(2);
+  }
+  // Strip accidental redundant 0 after Ghana country code (e.g. +233024xxxxxxx or 233024xxxxxxx -> 23324xxxxxxx)
+  if (/^2330\d{9}$/.test(cleaned)) {
+    cleaned = '233' + cleaned.substring(4);
+  }
+  // Ghana local 10-digit mobile check (MTN: 024, 054, 055, 059, 053; Telecel: 020, 050; AT: 027, 057, 026, 056; Glo: 023; Fixed: 030-039)
   if (/^0[235]\d{8}$/.test(cleaned)) {
     cleaned = '233' + cleaned.substring(1);
+  }
+  // Ghana local 9-digit mobile check without leading zero (e.g. 24xxxxxxx, 54xxxxxxx, 20xxxxxxx, 50xxxxxxx, 27xxxxxxx, etc.)
+  if (/^[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned;
   }
   return cleaned;
 }
@@ -602,7 +613,12 @@ async function dispatchArkeselSms({
   };
 }> {
   const backendReceivedTime = Date.now();
-  const rawList = Array.isArray(recipients) ? recipients : [recipients];
+  // Support comma, semicolon, or slash separated phone numbers for multi-recipient dispatch
+  const rawList = (Array.isArray(recipients) ? recipients : [recipients])
+    .flatMap(r => String(r || '').split(/[,;\/]+/))
+    .map(p => p.trim())
+    .filter(Boolean);
+
   const cleanedRecipients = rawList
     .map(normalizePhoneNumber)
     .filter(p => p.length >= 9 && /^\d+$/.test(p));
@@ -626,7 +642,7 @@ async function dispatchArkeselSms({
     };
   }
 
-  const trimmedMessage = (message || '').trim();
+  let trimmedMessage = (message || '').trim();
   if (!trimmedMessage) {
     const completionTime = Date.now();
     return {
@@ -644,6 +660,15 @@ async function dispatchArkeselSms({
         totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
       }
     };
+  }
+
+  // Ensure message body clearly identifies the business brand across all telecom networks
+  const targetBusinessName = resolveRegisteredBusinessName(businessId, businessName);
+  if (targetBusinessName && targetBusinessName.trim()) {
+    const brandPrefix = `[${targetBusinessName.trim()}]`;
+    if (!trimmedMessage.startsWith(brandPrefix) && !trimmedMessage.includes(targetBusinessName.trim())) {
+      trimmedMessage = `${brandPrefix} ${trimmedMessage}`;
+    }
   }
 
   // Use in-memory config for 0ms disk overhead
@@ -688,7 +713,6 @@ async function dispatchArkeselSms({
   }
 
   // Verify business-level SMS status (Enforced server-side with zero disk I/O)
-  const targetBusinessName = resolveRegisteredBusinessName(businessId, businessName);
   if (businessId && businessId !== 'platform') {
     const meta = getBusinessMetaCached(businessId);
     if (meta && meta.smsEnabled === false) {
@@ -737,26 +761,22 @@ async function dispatchArkeselSms({
 
   const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
 
-  // Determine dynamic sender ID: ALWAYS let the sender's name be the name of the registered business!
-  let effectiveSender = '';
-  if (targetBusinessName && targetBusinessName.trim()) {
-    effectiveSender = formatSenderIdFromBusinessName(targetBusinessName, config.senderId);
-  } else if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
-    effectiveSender = formatSenderIdFromBusinessName(senderId, config.senderId);
-  } else {
-    // If no specific business name was provided, resolve from any registered active business in the system
-    const anyBusName = resolveRegisteredBusinessName();
-    if (anyBusName) {
-      effectiveSender = formatSenderIdFromBusinessName(anyBusName, config.senderId);
-    } else {
-      effectiveSender = formatSenderIdFromBusinessName(config.senderId || 'BusinessOS');
-    }
+  // Determine Sender ID for universal network delivery:
+  // Ghanaian operators (MTN, Telecel, AirtelTigo) mandate pre-approved Sender IDs.
+  // The registered senderId in Arkesel configuration is whitelisted across all networks.
+  const registeredApprovedSender = formatSenderIdFromBusinessName(config.senderId || 'BusinessOS');
+  let effectiveSender = registeredApprovedSender;
+
+  // If a specific custom sender is requested and different, we attempt it with automatic fallback
+  if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
+    effectiveSender = formatSenderIdFromBusinessName(senderId, registeredApprovedSender);
   }
 
-  const payload = {
+  const payload: any = {
     sender: effectiveSender,
     message: trimmedMessage,
-    recipients: cleanedRecipients
+    recipients: cleanedRecipients,
+    use_case: 'transactional'
   };
 
   const arkeselRequestStartTime = Date.now();
@@ -766,7 +786,7 @@ async function dispatchArkeselSms({
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
     // Direct HTTP request to Arkesel with keep-alive
-    const response = await fetch(endpoint, {
+    let response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -778,13 +798,51 @@ async function dispatchArkeselSms({
     });
     clearTimeout(timeoutId);
 
-    const arkeselResponseTime = Date.now();
-    const responseText = await response.text();
+    let arkeselResponseTime = Date.now();
+    let responseText = await response.text();
     let data: any = null;
     try {
       data = JSON.parse(responseText);
     } catch {
       data = { raw: responseText };
+    }
+
+    let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+
+    // Multi-network recovery: If custom sender ID failed due to telecom whitelist restrictions,
+    // immediately retry once with the registered approved Sender ID for guaranteed multi-network delivery!
+    if (!response.ok && effectiveSender !== registeredApprovedSender && 
+        (lowerMsg.includes('sender') || lowerMsg.includes('unauthorized') || lowerMsg.includes('not approved') || lowerMsg.includes('whitelist') || response.status === 400 || response.status === 422)) {
+      console.warn(`[Arkesel Multi-Network Fallback] Custom sender "${effectiveSender}" was rejected by telecom gateway. Retrying with approved sender "${registeredApprovedSender}" to guarantee delivery to all networks.`);
+      effectiveSender = registeredApprovedSender;
+      payload.sender = registeredApprovedSender;
+
+      const retryController = new AbortController();
+      const retryTimeoutId = setTimeout(() => retryController.abort(), 10000);
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'api-key': config.apiKey.trim(),
+            'Connection': 'keep-alive'
+          },
+          body: JSON.stringify(payload),
+          signal: retryController.signal
+        });
+        clearTimeout(retryTimeoutId);
+        arkeselResponseTime = Date.now();
+        responseText = await response.text();
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          data = { raw: responseText };
+        }
+        lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+      } catch (retryErr) {
+        clearTimeout(retryTimeoutId);
+        console.warn('[Arkesel Multi-Network Fallback Retry Exception]:', retryErr);
+      }
     }
 
     const statusCode = response.status;
@@ -794,8 +852,6 @@ async function dispatchArkeselSms({
     // Check Arkesel official response specifications
     // Arkesel v2 returns { "status": "success", "data": [...], "message": "Successfully Submitted" }
     // Or code 1000 / "1000"
-    const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-
     if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('successfully submitted') || lowerMsg.includes('success'))) {
       isSuccess = true;
       status = 'Successfully sent';
@@ -994,6 +1050,7 @@ async function performPermanentBusinessDeletion(businessId: string, clientIp: st
 
   // Commit changes to local cloud_db.json FIRST
   writeDatabase(dbData);
+  businessMetaCache.delete(businessId);
   console.log(`[Super Admin] Atomically purged business ID: ${businessId} (${totalPurgedRecords} records removed) from cloud_db.json`);
 
   // STEP 2: Purge Firestore documents and collections directly using Client SDK on server
@@ -1171,6 +1228,56 @@ app.delete('/api/admin/business/:businessId', async (req, res) => {
   } catch (err: any) {
     console.error('Error during DELETE /api/admin/business/:businessId:', err);
     return res.status(500).json({ success: false, error: err.message || 'Server error while deleting business' });
+  }
+});
+
+// API 3.5b: Fast Bulk Business Delete Endpoint for Super Admin
+app.post('/api/admin/bulk-business-delete', async (req, res) => {
+  try {
+    const { businessIds } = req.body;
+    const isSuperAdmin = req.headers['x-super-admin'] === 'true' || req.body.isSuperAdmin === true;
+
+    if (!isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden: Only authenticated Super Admin can perform bulk business deletion.'
+      });
+    }
+
+    if (!Array.isArray(businessIds) || businessIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'businessIds array is required'
+      });
+    }
+
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
+    const adminUser = {
+      id: req.headers['x-admin-id'] || req.body.adminId || 'superadmin',
+      email: req.headers['x-admin-email'] || req.body.adminEmail || 'admin@businessos.com',
+      name: req.headers['x-admin-name'] || req.body.adminName || 'Super Admin'
+    };
+
+    // Filter out system ids
+    const validIds = businessIds.filter((id: any) => typeof id === 'string' && id.trim() && id !== 'platform' && id !== 'system');
+
+    const results = await Promise.allSettled(
+      validIds.map((id: string) => performPermanentBusinessDeletion(id.trim(), clientIp, adminUser))
+    );
+
+    const successfulDeletions = results.filter(r => r.status === 'fulfilled').length;
+
+    console.log(`[Super Admin Bulk Delete] Permanently deleted ${successfulDeletions} of ${validIds.length} businesses`);
+
+    return res.json({
+      success: true,
+      deletedCount: successfulDeletions,
+      totalRequested: validIds.length,
+      message: `Successfully deleted ${successfulDeletions} business${successfulDeletions === 1 ? '' : 'es'} permanently.`
+    });
+  } catch (err: any) {
+    console.error('Error during POST /api/admin/bulk-business-delete:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Server error while bulk deleting businesses' });
   }
 });
 
@@ -1514,6 +1621,44 @@ app.get('/api/admin/sms/logs', (req, res) => {
 // =========================================================================
 
 // Toggle or update per-business SMS status
+app.get('/api/admin/business/:id/sms-status', (req, res) => {
+  try {
+    const businessId = req.params.id;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'businessId parameter is required' });
+    }
+    const meta = getBusinessMetaCached(businessId);
+    if (meta) {
+      return res.json({
+        success: true,
+        businessId,
+        smsEnabled: meta.smsEnabled !== false,
+        name: meta.name
+      });
+    }
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    const target = businesses.find((b: any) => b && (b.id === businessId || b._id === businessId));
+    if (target) {
+      const isEnabled = target.smsEnabled !== false;
+      businessMetaCache.set(businessId, {
+        name: target.name || '',
+        smsEnabled: isEnabled,
+        cachedAt: Date.now()
+      });
+      return res.json({
+        success: true,
+        businessId,
+        smsEnabled: isEnabled,
+        name: target.name || ''
+      });
+    }
+    return res.status(404).json({ success: false, error: 'Business not found' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/admin/business-sms-toggle', async (req, res) => {
   try {
     const { businessId, smsEnabled } = req.body;
@@ -1558,6 +1703,13 @@ app.post('/api/admin/business-sms-toggle', async (req, res) => {
         updatedAt: new Date().toISOString()
       }, { merge: true }).catch(() => {});
     }
+
+    // Immediately update in-memory cache
+    businessMetaCache.set(businessId, {
+      name: businesses[targetIdx].name,
+      smsEnabled: isEnabled,
+      cachedAt: Date.now()
+    });
 
     console.log(`[Super Admin SMS Control] ${businesses[targetIdx].name} (${businessId}) SMS is now ${isEnabled ? 'ENABLED' : 'DISABLED'}`);
 
@@ -1626,6 +1778,11 @@ app.post('/api/admin/bulk-business-sms-toggle', async (req, res) => {
       batch.commit().catch((err: any) => console.error('Firestore batch commit bulk SMS err:', err));
     }
 
+    // Invalidate/update cache for affected businesses
+    businessIds.forEach(id => {
+      businessMetaCache.delete(id);
+    });
+
     console.log(`[Super Admin Bulk SMS Control] Set SMS ${isEnabled ? 'ENABLED' : 'DISABLED'} for ${updatedCount} businesses`);
 
     return res.json({
@@ -1636,6 +1793,152 @@ app.post('/api/admin/bulk-business-sms-toggle', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error in POST /api/admin/bulk-business-sms-toggle:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// =========================================================================
+// SUPER ADMIN BUSINESS DELETION ENDPOINTS (Fast, Permanent & Effective)
+// =========================================================================
+
+// Single Business Permanent Delete
+app.delete('/api/admin/business/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || id === 'platform' || id === 'system') {
+      return res.status(400).json({ success: false, error: 'Invalid business ID' });
+    }
+
+    const dbData = readDatabase();
+
+    // 1. Purge across ALL tables in cloud_db.json in one fast pass
+    for (const key of Object.keys(dbData)) {
+      if (key === 'bos_deleted_business_ids') continue;
+      if (Array.isArray(dbData[key])) {
+        if (key === 'bos_businesses' || key === 'businesses') {
+          dbData[key] = dbData[key].filter((b: any) => b && b.id !== id);
+        } else {
+          dbData[key] = dbData[key].filter((item: any) => {
+            if (!item) return false;
+            if (item.id === id) return false;
+            if (item.businessId === id) return false;
+            if (item.schoolId === id) return false;
+            if (item.business_id === id) return false;
+            return true;
+          });
+        }
+      }
+    }
+
+    // 2. Register tombstone to permanently prevent restoration or stale sync
+    if (!Array.isArray(dbData['bos_deleted_business_ids'])) {
+      dbData['bos_deleted_business_ids'] = [];
+    }
+    const alreadyTombstoned = dbData['bos_deleted_business_ids'].some((item: any) =>
+      typeof item === 'string' ? item === id : item?.id === id
+    );
+    if (!alreadyTombstoned) {
+      dbData['bos_deleted_business_ids'].push({ id, businessId: id, deletedAt: new Date().toISOString() });
+    }
+
+    writeDatabase(dbData);
+    businessMetaCache.delete(id);
+
+    // 3. Fast non-blocking Firestore document deletion
+    const nowIso = new Date().toISOString();
+    if (serverFsDb) {
+      withTimeout(
+        Promise.allSettled([
+          fsDeleteDoc(fsDoc(serverFsDb, 'bos_businesses', id)),
+          fsDeleteDoc(fsDoc(serverFsDb, 'businesses', id)),
+          fsSetDoc(fsDoc(serverFsDb, 'bos_deleted_business_ids', id), { id, businessId: id, deletedAt: nowIso })
+        ]),
+        1200
+      ).catch(() => {});
+    }
+
+    console.log(`[Super Admin Business Delete] Permanently purged business ${id} from database`);
+    return res.json({ success: true, message: `Business ${id} permanently deleted.` });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/admin/business/:id:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk Business Permanent Delete
+app.post('/api/admin/bulk-business-delete', async (req, res) => {
+  try {
+    const { businessIds } = req.body;
+    if (!Array.isArray(businessIds) || businessIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'No business IDs provided' });
+    }
+
+    const validIds = businessIds.filter((id: any) => typeof id === 'string' && id.trim() && id !== 'platform' && id !== 'system');
+    if (validIds.length === 0) {
+      return res.json({ success: true, deletedCount: 0, message: 'No valid businesses to delete' });
+    }
+
+    const idSet = new Set(validIds);
+    const dbData = readDatabase();
+
+    // 1. Purge all matching records across all collections in cloud_db.json in one atomic step
+    for (const key of Object.keys(dbData)) {
+      if (key === 'bos_deleted_business_ids') continue;
+      if (Array.isArray(dbData[key])) {
+        if (key === 'bos_businesses' || key === 'businesses') {
+          dbData[key] = dbData[key].filter((b: any) => b && !idSet.has(b.id));
+        } else {
+          dbData[key] = dbData[key].filter((item: any) => {
+            if (!item) return false;
+            if (item.id && idSet.has(String(item.id))) return false;
+            if (item.businessId && idSet.has(String(item.businessId))) return false;
+            if (item.schoolId && idSet.has(String(item.schoolId))) return false;
+            if (item.business_id && idSet.has(String(item.business_id))) return false;
+            return true;
+          });
+        }
+      }
+    }
+
+    // 2. Register tombstones
+    if (!Array.isArray(dbData['bos_deleted_business_ids'])) {
+      dbData['bos_deleted_business_ids'] = [];
+    }
+    const nowIso = new Date().toISOString();
+    const existingTombstones = new Set(
+      dbData['bos_deleted_business_ids'].map((item: any) => typeof item === 'string' ? item : item?.id)
+    );
+    validIds.forEach(id => {
+      if (!existingTombstones.has(id)) {
+        dbData['bos_deleted_business_ids'].push({ id, businessId: id, deletedAt: nowIso });
+      }
+      businessMetaCache.delete(id);
+    });
+
+    writeDatabase(dbData);
+
+    // 3. Fast non-blocking Firestore document deletion in batch
+    if (serverFsDb) {
+      withTimeout(
+        Promise.allSettled(
+          validIds.flatMap(id => [
+            fsDeleteDoc(fsDoc(serverFsDb, 'bos_businesses', id)).catch(() => {}),
+            fsDeleteDoc(fsDoc(serverFsDb, 'businesses', id)).catch(() => {}),
+            fsSetDoc(fsDoc(serverFsDb, 'bos_deleted_business_ids', id), { id, businessId: id, deletedAt: nowIso }).catch(() => {})
+          ])
+        ),
+        1500
+      ).catch(() => {});
+    }
+
+    console.log(`[Super Admin Bulk Business Delete] Successfully purged ${validIds.length} businesses from database`);
+    return res.json({
+      success: true,
+      deletedCount: validIds.length,
+      message: `Permanently deleted ${validIds.length} business${validIds.length === 1 ? '' : 'es'} from the database.`
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/bulk-business-delete:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });

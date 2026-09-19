@@ -1,19 +1,6 @@
 {
   "bos_logs": [
     {
-      "id": "audit-del-1789289138210-mn4i",
-      "action": "PERMANENT_DELETE_BUSINESS",
-      "businessId": "test-fast-delete-456",
-      "businessName": "test-fast-delete-456",
-      "superAdminId": "superadmin",
-      "superAdminEmail": "admin@businessos.com",
-      "superAdminName": "Super Admin",
-      "timestamp": "2026-09-13T08:45:38.210Z",
-      "ipAddress": "127.0.0.1",
-      "status": "Success",
-      "details": "Super Admin permanently deleted business \"test-fast-delete-456\" (ID: test-fast-delete-456), purged 0 database records immediately."
-    },
-    {
       "id": "audit-del-1788608265042-i1op",
       "action": "PERMANENT_DELETE_BUSINESS",
       "businessId": "test-fast-perf-456",
@@ -2971,19 +2958,6 @@
   ],
   "bos_feature_audit_logs": [
     {
-      "id": "audit-del-1789289138210-mn4i",
-      "action": "PERMANENT_DELETE_BUSINESS",
-      "businessId": "test-fast-delete-456",
-      "businessName": "test-fast-delete-456",
-      "superAdminId": "superadmin",
-      "superAdminEmail": "admin@businessos.com",
-      "superAdminName": "Super Admin",
-      "timestamp": "2026-09-13T08:45:38.210Z",
-      "ipAddress": "127.0.0.1",
-      "status": "Success",
-      "details": "Super Admin permanently deleted business \"test-fast-delete-456\" (ID: test-fast-delete-456), purged 0 database records immediately."
-    },
-    {
       "id": "audit-del-1788608265042-i1op",
       "action": "PERMANENT_DELETE_BUSINESS",
       "businessId": "test-fast-perf-456",
@@ -4266,5 +4240,19 @@
     "test-fast-delete-123",
     "test-fast-delete-456"
   ],
-  "bos_students": []
+  "bos_students": [],
+  "bos_sms_config": [
+    {
+      "id": "global",
+      "apiKey": "QldvUUtlbVFhSmtTY25jYmRldXI",
+      "senderId": "BusinessOS",
+      "apiEndpoint": "https://sms.arkesel.com/api/v2/sms/send",
+      "isEnabled": true,
+      "totalSentCount": 0,
+      "lastTestedAt": "2026-09-18T08:36:16.144Z",
+      "lastTestStatus": "Active & Connected",
+      "lastTestMessage": "Connection verified. Balance: 589",
+      "updatedAt": "2026-09-18T08:36:16.147Z"
+    }
+  ]
 }

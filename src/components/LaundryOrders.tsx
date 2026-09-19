@@ -701,23 +701,23 @@ export const LaundryOrders: React.FC<LaundryOrdersProps> = ({
               {(() => {
                 const { subtotal, totalPieces, finalTotal, balanceDue, paymentStatus } = calculateTotals();
                 return (
-                  <div className="bg-slate-900 text-white p-5 rounded-2xl space-y-4">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center border-b border-slate-800 pb-3">
+                  <div className="bg-slate-50 border border-slate-200 text-slate-800 p-5 rounded-2xl space-y-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center border-b border-slate-200 pb-3">
                       <div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase">Total Pieces</div>
-                        <div className="text-lg font-black text-white">{totalPieces}</div>
+                        <div className="text-[10px] text-slate-500 font-bold uppercase">Total Pieces</div>
+                        <div className="text-lg font-black text-slate-800">{totalPieces}</div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase">Subtotal</div>
-                        <div className="text-lg font-black text-slate-200">{formatCurrency(subtotal, business.currency)}</div>
+                        <div className="text-[10px] text-slate-500 font-bold uppercase">Subtotal</div>
+                        <div className="text-lg font-black text-slate-700">{formatCurrency(subtotal, business.currency)}</div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase">Final Amount</div>
-                        <div className="text-lg font-black text-cyan-400">{formatCurrency(finalTotal, business.currency)}</div>
+                        <div className="text-[10px] text-slate-500 font-bold uppercase">Final Amount</div>
+                        <div className="text-lg font-black text-blue-700">{formatCurrency(finalTotal, business.currency)}</div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase">Balance Due</div>
-                        <div className={`text-lg font-black ${balanceDue > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        <div className="text-[10px] text-slate-500 font-bold uppercase">Balance Due</div>
+                        <div className={`text-lg font-black ${balanceDue > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {formatCurrency(balanceDue, business.currency)}
                         </div>
                       </div>
@@ -725,7 +725,7 @@ export const LaundryOrders: React.FC<LaundryOrdersProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Deposit / Amount Paid Now</label>
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Deposit / Amount Paid Now</label>
                         <input
                           type="number"
                           min="0"
@@ -733,12 +733,12 @@ export const LaundryOrders: React.FC<LaundryOrdersProps> = ({
                           value={amountPaid || ''}
                           onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
                           placeholder="0.00"
-                          className="w-full py-2 px-3 bg-slate-950 border border-slate-800 rounded-xl text-white font-bold text-xs"
+                          className="w-full py-2 px-3 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Discount Amount</label>
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Discount Amount</label>
                         <input
                           type="number"
                           min="0"
@@ -746,7 +746,7 @@ export const LaundryOrders: React.FC<LaundryOrdersProps> = ({
                           value={discount || ''}
                           onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
                           placeholder="0.00"
-                          className="w-full py-2 px-3 bg-slate-950 border border-slate-800 rounded-xl text-white font-bold text-xs"
+                          className="w-full py-2 px-3 bg-white border border-slate-200 rounded-xl text-slate-800 font-bold text-xs focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                         />
                       </div>
                     </div>

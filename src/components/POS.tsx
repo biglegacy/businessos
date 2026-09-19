@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { db, getCurrencySymbol, formatCurrency } from '../lib/db';
 import { isProductBasedBusiness } from '../lib/businessType';
@@ -14,10 +14,8 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Percent, 
   DollarSign, Check, FileText, X, Sparkles, Building, UserCheck,
   Calendar, Phone, User as UserIcon, Clock, ClipboardList, CheckCircle, AlertCircle, RefreshCw,
-  Settings as SettingsIcon, Edit2, Trash, QrCode, Camera, Package, Send, Loader2
+  Settings as SettingsIcon, Edit2, Trash, Package, Send, Loader2, Pause, Play, History
 } from 'lucide-react';
-import { MobileScanner } from './MobileScanner';
-import { InAppMobileScannerModal } from './InAppMobileScannerModal';
 
 interface POSProps {
   business: Business;
@@ -26,7 +24,33 @@ interface POSProps {
   branchId?: string;
 }
 
+interface PausedOrder {
+  id: string;
+  timestamp: string;
+  label: string;
+  cart: CartItem[];
+  selectedCustomerId: string;
+  checkoutCustomerPhone: string;
+  discountPercent: number;
+  total: number;
+}
+
 export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
+  // Live business state directly synced with database and Super Admin controls
+  const [liveBusiness, setLiveBusiness] = useState<Business>(() => {
+    return db.getBusinesses().find(b => b.id === business.id) || business;
+  });
+
+  useEffect(() => {
+    const unsub = db.subscribe(() => {
+      const updated = db.getBusinesses().find(b => b.id === business.id);
+      if (updated) {
+        setLiveBusiness(updated);
+      }
+    });
+    return unsub;
+  }, [business.id]);
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -36,70 +60,33 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [checkoutCustomerPhone, setCheckoutCustomerPhone] = useState('');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile' | 'other'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile' | 'credit' | 'other'>('cash');
   const [amountReceived, setAmountReceived] = useState<number | ''>('');
   
+  // Paused / Held Orders State
+  const [pausedOrders, setPausedOrders] = useState<PausedOrder[]>(() => {
+    try {
+      const saved = localStorage.getItem(`bos_paused_orders_${business.id}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isPausedOrdersModalOpen, setIsPausedOrdersModalOpen] = useState(false);
+
+  // Idempotency tracking to strictly prevent duplicate SMS dispatch
+  const sentSmsReceiptMap = useRef<Set<string>>(new Set());
+
   // Checkout status / Active Invoice Receipt
   const [createdSale, setCreatedSale] = useState<Sale | null>(null);
   const [isReceiptCustomizing, setIsReceiptCustomizing] = useState(false);
   const [smsReceiptPhone, setSmsReceiptPhone] = useState('');
   const [isSendingSmsReceipt, setIsSendingSmsReceipt] = useState(false);
+  const [isCompletingSale, setIsCompletingSale] = useState(false);
   const [smsReceiptStatus, setSmsReceiptStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   // Local reload trigger for catalog template updates
   const [localReloadKey, setLocalReloadKey] = useState(0);
-
-  // Mobile Barcode Scanner States
-  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
-  const [activeScannerSessionId, setActiveScannerSessionId] = useState<string | null>(null);
-  const [isMobileScannerActive, setIsMobileScannerActive] = useState<boolean>(false);
-
-  const handleOpenMobileScanner = () => {
-    setIsScannerModalOpen(true);
-  };
-
-  // Active Remote Mobile Scanner Background Listener
-  useEffect(() => {
-    if (!activeScannerSessionId) return;
-
-    const interval = setInterval(() => {
-      // 1. Check for scanned items from mobile phone
-      const items = db.getScannedItemsForSession(business.id, activeScannerSessionId);
-      if (items.length > 0) {
-        items.forEach(payload => {
-          const barcode = payload.barcode.trim();
-          if (!barcode) return;
-
-          const products = db.getProducts(business.id);
-          const services = db.getServices(business.id);
-
-          const matchedProd = products.find(p => p.barcode === barcode || p.id === barcode);
-          const matchedServ = services.find(s => s.code === barcode || s.id === barcode);
-
-          if (matchedProd) {
-            addToCart(matchedProd, 'product');
-            showSuccess('Mobile Scanner Item Added', `${matchedProd.name} added to cart`);
-          } else if (matchedServ) {
-            addToCart(matchedServ, 'service');
-            showSuccess('Mobile Scanner Item Added', `${matchedServ.name} added to cart`);
-          } else {
-            showError('Barcode Not Found', `Barcode ${barcode} not in inventory`);
-          }
-        });
-        db.clearScannedItemsForSession(business.id, activeScannerSessionId);
-      }
-
-      // 2. Check for remote print requests from mobile phone
-      const printCmds = db.getPrintCommandsForSession(business.id, activeScannerSessionId);
-      if (printCmds.length > 0) {
-        showSuccess('Remote Print Request', 'Printing sale receipt on desktop printer...');
-        handlePrintSaleReceipt();
-        db.clearPrintCommandsForSession(business.id, activeScannerSessionId);
-      }
-    }, 800);
-
-    return () => clearInterval(interval);
-  }, [activeScannerSessionId, business.id]);
 
 
   // Toggle tab for left column if business is services: 'catalog' vs 'products' vs 'activeJobs'
@@ -436,7 +423,70 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     return { subtotal, discount, totalTax, total };
   };
 
-  const handleCheckout = () => {
+  // Pause Order Handlers
+  const handlePauseOrder = () => {
+    if (cart.length === 0) {
+      showError('Cart Empty', 'Cart is empty. Nothing to pause.');
+      return;
+    }
+    const customer = customers.find(c => c.id === selectedCustomerId);
+    const label = customer?.name || checkoutCustomerPhone || `Ticket #${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const { total } = getCartTotals();
+    const newPausedOrder: PausedOrder = {
+      id: 'paused-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      label,
+      cart: [...cart],
+      selectedCustomerId,
+      checkoutCustomerPhone,
+      discountPercent,
+      total
+    };
+    const updated = [newPausedOrder, ...pausedOrders];
+    setPausedOrders(updated);
+    try {
+      localStorage.setItem(`bos_paused_orders_${business.id}`, JSON.stringify(updated));
+    } catch {}
+    
+    // Clear active cart for next customer
+    setCart([]);
+    setSelectedCustomerId('');
+    setCheckoutCustomerPhone('');
+    setDiscountPercent(0);
+    setAmountReceived('');
+    showSuccess('Order Paused', `Order paused (${label}). Cart cleared for next customer.`);
+  };
+
+  const handleResumeOrder = (order: PausedOrder) => {
+    if (cart.length > 0) {
+      const confirmed = window.confirm('Your active cart has items. Resuming this paused order will replace current cart items. Continue?');
+      if (!confirmed) return;
+    }
+    setCart(order.cart);
+    setSelectedCustomerId(order.selectedCustomerId);
+    setCheckoutCustomerPhone(order.checkoutCustomerPhone);
+    setDiscountPercent(order.discountPercent);
+    setAmountReceived('');
+    const updated = pausedOrders.filter(p => p.id !== order.id);
+    setPausedOrders(updated);
+    try {
+      localStorage.setItem(`bos_paused_orders_${business.id}`, JSON.stringify(updated));
+    } catch {}
+    setIsPausedOrdersModalOpen(false);
+    showSuccess('Order Resumed', `Resumed paused order (${order.label}).`);
+  };
+
+  const handleDiscardPausedOrder = (id: string) => {
+    const updated = pausedOrders.filter(p => p.id !== id);
+    setPausedOrders(updated);
+    try {
+      localStorage.setItem(`bos_paused_orders_${business.id}`, JSON.stringify(updated));
+    } catch {}
+    showSuccess('Order Discarded', 'Paused order discarded.');
+  };
+
+  const handleCheckout = async () => {
+    if (isCompletingSale) return;
     if (cart.length === 0) {
       alert('Cart is empty.');
       return;
@@ -452,6 +502,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
     const { subtotal, discount, totalTax, total } = getCartTotals();
 
+    // 1. Validation
     if (paymentMethod === 'cash') {
       if (amountReceived === '' || amountReceived < total) {
         alert(`Checkout Blocked: Please enter a valid cash Amount Received greater than or equal to the total due of ${formatCurrency(total, business.currency)}.`);
@@ -459,190 +510,260 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
       }
     }
 
-    const customer = customers.find(c => c.id === selectedCustomerId);
-    const targetPhone = checkoutCustomerPhone.trim() || customer?.phone || undefined;
-    const activeSaleBranchId = (branchId && branchId !== 'All') ? branchId : (user.branchId || undefined);
-
-    const newSale: Sale = {
-      id: 's-tr' + Math.random().toString(36).substring(2, 9),
-      businessId: business.id,
-      branchId: activeSaleBranchId, // Set branchId on the Sale
-      items: cart.map(i => ({
-        itemId: i.id,
-        name: i.name,
-        type: i.type,
-        price: i.price,
-        quantity: i.quantity
-      })),
-      subtotal,
-      discount,
-      total,
-      paymentMethod,
-      amountReceived: paymentMethod === 'cash' ? Number(amountReceived) : undefined,
-      change: paymentMethod === 'cash' ? (Number(amountReceived) - total) : undefined,
-      customerId: customer?.id,
-      customerName: customer?.name,
-      customerPhone: targetPhone,
-      employeeId: user.id,
-      employeeName: user.name,
-      createdAt: new Date().toISOString(),
-      status: 'completed',
-      currency: business.currency || 'GHC'
-    };
-
-    // Save sale to dynamic cloud store
-    db.saveSale(business.id, newSale);
-
-    // Dispatch real-time push notification for new sale
-    notifyNewSale(business.id, {
-      receiptNumber: newSale.id.slice(-6).toUpperCase(),
-      totalAmount: total,
-      itemCount: cart.reduce((acc, item) => acc + item.quantity, 0)
-    });
-
-    // Automatically trigger Arkesel SMS Receipt dispatch in background if phone was supplied
-    if (targetPhone) {
-      const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
-      const msg = `${business.name}: Receipt #${newSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(newSale.total, newSale.currency || business.currency)}. Thank you for your patronage!`;
-      setIsSendingSmsReceipt(true);
-      db.sendSms({
-        recipient: targetPhone,
-        message: msg,
-        businessId: business.id,
-        businessName: business.name,
-        type: 'receipt'
-      }).then(res => {
-        if (res.success) {
-          setSmsReceiptStatus({ success: true, message: `Receipt SMS sent successfully to ${targetPhone}.` });
-        } else {
-          setSmsReceiptStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
-        }
-      }).catch(err => {
-        console.warn('SMS dispatch background notice:', err);
-        setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
-      }).finally(() => {
-        setIsSendingSmsReceipt(false);
-      });
+    if (paymentMethod === 'credit') {
+      if (!selectedCustomerId) {
+        alert('Credit / Debt Sale Blocked: Please select a registered customer above to assign and track this outstanding receivable.');
+        return;
+      }
     }
 
-    // Decrement stock levels for products in cart in real-time
-    cart.forEach(item => {
-      if (item.type === 'product') {
-        const matchingProduct = rawProducts.find(p => p.id === item.id);
-        if (matchingProduct) {
-          const nextStock = Math.max(0, matchingProduct.stockQuantity - item.quantity);
-          const updatedProduct = {
-            ...matchingProduct,
-            stockQuantity: nextStock,
-            updatedAt: new Date().toISOString()
-          };
-          db.saveProduct(business.id, updatedProduct);
+    setIsCompletingSale(true);
+    try {
+      // 1. Automatically check the business's 'smsEnabled' setting directly from the database upon clicking 'Complete Order'
+      let isBusinessSmsEnabled = liveBusiness.smsEnabled !== false;
+      try {
+        const freshSmsEnabled = await db.checkBusinessSmsEnabled(business.id);
+        isBusinessSmsEnabled = freshSmsEnabled;
+        if (liveBusiness.smsEnabled !== freshSmsEnabled) {
+          setLiveBusiness(prev => ({ ...prev, smsEnabled: freshSmsEnabled }));
+        }
+      } catch (checkErr) {
+        console.warn('[POS SMS] Error checking fresh smsEnabled from database, using cached setting:', checkErr);
+      }
 
-          // Trigger low stock push notification if threshold reached
-          const threshold = typeof updatedProduct.lowStockThreshold === 'number' ? updatedProduct.lowStockThreshold : 5;
-          if (nextStock <= threshold) {
-            notifyLowStock(business.id, {
-              name: updatedProduct.name,
-              currentQuantity: nextStock,
-              minThreshold: threshold
-            });
+      const customer = customers.find(c => c.id === selectedCustomerId);
+      const targetPhone = checkoutCustomerPhone.trim() || customer?.phone || undefined;
+      const activeSaleBranchId = (branchId && branchId !== 'All') ? branchId : (user.branchId || undefined);
+
+      // Credit calculation
+      const paidAmount = paymentMethod === 'credit'
+        ? (amountReceived !== '' ? Number(amountReceived) : 0)
+        : (paymentMethod === 'cash' ? total : total);
+      
+      const amountOwed = paymentMethod === 'credit'
+        ? Math.max(0, total - paidAmount)
+        : undefined;
+
+      const paymentStatus = paymentMethod === 'credit'
+        ? (amountOwed === 0 ? 'paid' : (paidAmount > 0 ? 'partial' : 'unpaid'))
+        : 'paid';
+
+      // Determine Initial SMS Status based on fresh database setting
+      let initialSmsStatus: 'Sent' | 'Failed' | 'Pending' | 'Skipped — no phone' | 'Skipped — SMS disabled' = 'Pending';
+      let initialSmsDetail = 'Queued for automatic dispatch';
+      if (!isBusinessSmsEnabled) {
+        initialSmsStatus = 'Skipped — SMS disabled';
+        initialSmsDetail = 'SMS disabled for business in database';
+      } else if (!targetPhone) {
+        initialSmsStatus = 'Skipped — no phone';
+        initialSmsDetail = 'Skipped — no customer phone number';
+      }
+
+      // 2. Generate unique Transaction ID & Save/Process Sale Successfully
+      const transactionId = 's-tr' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
+      const newSale: Sale = {
+        id: transactionId,
+        businessId: business.id,
+        branchId: activeSaleBranchId,
+        items: cart.map(i => ({
+          itemId: i.id,
+          name: i.name,
+          type: i.type,
+          price: i.price,
+          quantity: i.quantity
+        })),
+        subtotal,
+        discount,
+        total,
+        paymentMethod,
+        paymentStatus,
+        amountPaid: paidAmount,
+        amountReceived: paymentMethod === 'cash' ? Number(amountReceived) : paidAmount,
+        amountOwed,
+        change: paymentMethod === 'cash' ? (Number(amountReceived) - total) : undefined,
+        customerId: customer?.id,
+        customerName: customer?.name,
+        customerPhone: targetPhone,
+        employeeId: user.id,
+        employeeName: user.name,
+        createdAt: new Date().toISOString(),
+        status: 'completed',
+        currency: liveBusiness.currency || business.currency || 'GHC',
+        smsStatus: initialSmsStatus,
+        smsStatusDetail: initialSmsDetail
+      };
+
+      // Save sale to dynamic cloud store first - transactions are saved before SMS attempt
+      db.saveSale(business.id, newSale);
+
+      // Decrement stock levels for products in cart in real-time
+      cart.forEach(item => {
+        if (item.type === 'product') {
+          const matchingProduct = rawProducts.find(p => p.id === item.id);
+          if (matchingProduct) {
+            const nextStock = Math.max(0, matchingProduct.stockQuantity - item.quantity);
+            const updatedProduct = {
+              ...matchingProduct,
+              stockQuantity: nextStock,
+              updatedAt: new Date().toISOString()
+            };
+            db.saveProduct(business.id, updatedProduct);
+
+            // Trigger low stock push notification if threshold reached
+            const threshold = typeof updatedProduct.lowStockThreshold === 'number' ? updatedProduct.lowStockThreshold : 5;
+            if (nextStock <= threshold) {
+              notifyLowStock(business.id, {
+                name: updatedProduct.name,
+                currentQuantity: nextStock,
+                minThreshold: threshold
+              });
+            }
           }
         }
-      }
-    });
-
-    // If customer had pre-existing balance tab or paid via store credit, update customer
-    if (customer && customer.balance > 0 && paymentMethod === 'other') {
-      db.saveCustomer(business.id, {
-        ...customer,
-        balance: Math.max(0, customer.balance - total)
       });
-    }
 
-    // Add activity log
-    db.addActivityLog(business.id, {
-      userId: user.id,
-      userName: user.name,
-      userRole: user.role,
-      action: 'POS Transaction Completed',
-      moduleAffected: 'Sales',
-      itemAffected: `Sale #${newSale.id}`,
-      previousValue: '',
-      newValue: `Total: ${formatCurrency(total, business.currency)}`,
-      details: `Completed transaction ${newSale.id} totaling ${formatCurrency(total, business.currency)} using ${paymentMethod}.`,
-      branchId: user.branchId
-    });
+      // Update customer debt balance if credit sale or store credit
+      if (customer && paymentMethod === 'credit' && amountOwed && amountOwed > 0) {
+        db.saveCustomer(business.id, {
+          ...customer,
+          balance: (customer.balance || 0) + amountOwed
+        });
+      } else if (customer && customer.balance > 0 && paymentMethod === 'other') {
+        db.saveCustomer(business.id, {
+          ...customer,
+          balance: Math.max(0, customer.balance - total)
+        });
+      }
 
-    setCreatedSale(newSale);
-    setSmsReceiptPhone(targetPhone || '');
-    setCart([]);
-    setAmountReceived('');
-    setDiscountPercent(0);
-    setSelectedCustomerId('');
-    setCheckoutCustomerPhone('');
+      // Dispatch real-time push notification for new sale
+      notifyNewSale(business.id, {
+        receiptNumber: transactionId.slice(-6).toUpperCase(),
+        totalAmount: total,
+        itemCount: cart.reduce((acc, item) => acc + item.quantity, 0)
+      });
 
-    // Automatically send SMS receipt via Arkesel upon checkout
-    if (targetPhone && business.smsEnabled !== false) {
-      setIsSendingSmsReceipt(true);
-      setSmsReceiptStatus(null);
-      const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
-      const msg = `${business.name}: Receipt #${newSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(newSale.total, newSale.currency || business.currency)}. Thank you for your patronage!`;
+      // Add activity log
+      db.addActivityLog(business.id, {
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        action: 'POS Transaction Completed',
+        moduleAffected: 'Sales',
+        itemAffected: `Sale #${transactionId}`,
+        previousValue: '',
+        newValue: `Total: ${formatCurrency(total, business.currency)}`,
+        details: `Completed transaction ${transactionId} totaling ${formatCurrency(total, business.currency)} using ${paymentMethod}.`,
+        branchId: user.branchId
+      });
 
-      db.sendSms({
-        recipient: targetPhone,
-        message: msg,
-        businessId: business.id,
-        businessName: business.name,
-        type: 'receipt'
-      }).then(res => {
-        setIsSendingSmsReceipt(false);
-        if (res.success) {
-          setSmsReceiptStatus({ success: true, message: `Receipt SMS automatically sent to ${targetPhone}.` });
+      // 3. Generate Receipt / Order Information
+      setCreatedSale(newSale);
+      setSmsReceiptPhone(targetPhone || '');
+      setCart([]);
+      setAmountReceived('');
+      setDiscountPercent(0);
+      setSelectedCustomerId('');
+      setCheckoutCustomerPhone('');
+
+      // 4. Automatic Arkesel SMS Receipt Dispatch with Idempotency & Fault Tolerance
+      // Ensure duplicate SMS sending is prevented by verifying the transaction ID before triggering the call
+      const saleReceiptKey = `bos_sent_sms_${transactionId}`;
+      const isAlreadyDispatched = 
+        !transactionId ||
+        sentSmsReceiptMap.current.has(transactionId) || 
+        (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(saleReceiptKey) === '1') ||
+        (typeof localStorage !== 'undefined' && localStorage.getItem(saleReceiptKey) === '1');
+
+      if (isBusinessSmsEnabled && targetPhone) {
+        if (!isAlreadyDispatched) {
+          // Lock transaction ID immediately to prevent rapid double triggers
+          sentSmsReceiptMap.current.add(transactionId);
+          try {
+            sessionStorage.setItem(saleReceiptKey, '1');
+            localStorage.setItem(saleReceiptKey, '1');
+          } catch {}
+
+          setIsSendingSmsReceipt(true);
+          setSmsReceiptStatus(null);
+
+          const receiptNum = transactionId.slice(-6).toUpperCase();
+          const currency = newSale.currency || liveBusiness.currency || business.currency || 'GHS';
+          const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+          const paidStr = formatCurrency(newSale.amountPaid ?? newSale.total, currency);
+          const totalStr = formatCurrency(newSale.total, currency);
+          const balanceStr = newSale.paymentMethod === 'credit' && (newSale.amountOwed || 0) > 0
+            ? `Bal Owed: ${formatCurrency(newSale.amountOwed!, currency)}`
+            : (newSale.change && newSale.change > 0 ? `Change: ${formatCurrency(newSale.change, currency)}` : `Bal: ${formatCurrency(0, currency)}`);
+
+          const msg = `Thank you for shopping at ${liveBusiness.name}. Receipt #${receiptNum}. Items: ${itemsSummary}. Total: ${totalStr}. Paid: ${paidStr}. ${balanceStr}. Payment: ${newSale.paymentMethod.toUpperCase()}. Thank you!`;
+
+          // Trigger Arkesel SMS call; ensure failures do not cancel or revert the transaction
+          db.sendSms({
+            recipient: targetPhone,
+            message: msg,
+            businessId: liveBusiness.id,
+            businessName: liveBusiness.name,
+            idempotencyKey: `pos_receipt_${transactionId}`,
+            type: 'receipt',
+            clientTriggerTime: Date.now()
+          }).then(res => {
+            setIsSendingSmsReceipt(false);
+            if (res.success) {
+              const updatedSale: Sale = {
+                ...newSale,
+                smsStatus: 'Sent',
+                smsStatusDetail: `Sent to ${targetPhone}`
+              };
+              db.saveSale(business.id, updatedSale);
+              setSmsReceiptStatus({ success: true, message: `Receipt SMS automatically sent to ${targetPhone}.` });
+              showSuccess('Sale Completed', `Sale completed and receipt SMS sent to ${targetPhone}.`);
+            } else {
+              // Log the error and display non-blocking notification (transaction remains successful)
+              console.error('[POS SMS Error] SMS receipt delivery failed for transaction ID:', transactionId, {
+                status: res.status,
+                message: res.message,
+                phone: targetPhone
+              });
+              const updatedSale: Sale = {
+                ...newSale,
+                smsStatus: 'Failed',
+                smsStatusDetail: res.message || res.status || 'SMS delivery failed'
+              };
+              db.saveSale(business.id, updatedSale);
+              setSmsReceiptStatus({ success: false, message: `Order completed, but SMS receipt could not be delivered: ${res.message || 'Gateway error'}` });
+              showError('SMS Notice', `Order completed successfully, but SMS receipt could not be sent: ${res.message || 'SMS service error'}`);
+            }
+          }).catch(err => {
+            // Unhandled network or server exception: log and display non-blocking notification
+            console.error('[POS SMS Error] Network error during Arkesel SMS receipt dispatch for transaction ID:', transactionId, err);
+            setIsSendingSmsReceipt(false);
+            const updatedSale: Sale = {
+              ...newSale,
+              smsStatus: 'Failed',
+              smsStatusDetail: err?.message || 'Network error sending SMS'
+            };
+            db.saveSale(business.id, updatedSale);
+            setSmsReceiptStatus({ success: false, message: 'Order completed, but SMS receipt could not be sent due to network issues.' });
+            showError('SMS Notice', 'Order completed successfully, but SMS receipt could not be sent due to network error.');
+          });
         } else {
-          setSmsReceiptStatus({ success: false, message: res.message || 'SMS delivery failed or skipped.' });
+          console.warn(`[POS SMS] Suppressed duplicate SMS dispatch: Transaction ID ${transactionId} already verified and processed.`);
+          showSuccess('Sale Completed', 'Sale completed successfully.');
         }
-      }).catch(err => {
-        setIsSendingSmsReceipt(false);
-        setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
-      });
-    } else if (targetPhone && business.smsEnabled === false) {
-      setSmsReceiptStatus({ success: false, message: 'SMS is disabled for this business in Super Admin.' });
-    }
-
-    onSaleComplete();
-  };
-
-  const handleSendSmsReceipt = async () => {
-    if (!createdSale) return;
-    const phone = smsReceiptPhone.trim() || customers.find(c => c.id === createdSale.customerId)?.phone;
-    if (!phone) {
-      alert('Please enter a recipient phone number (e.g. 0244123456).');
-      return;
-    }
-
-    setIsSendingSmsReceipt(true);
-    setSmsReceiptStatus(null);
-    try {
-      const itemsSummary = createdSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
-      const msg = `${business.name}: Receipt #${createdSale.id.slice(-6).toUpperCase()} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(createdSale.total, createdSale.currency || business.currency)}. Thank you for your patronage!`;
-      
-      const res = await db.sendSms({
-        recipient: phone,
-        message: msg,
-        businessId: business.id,
-        businessName: business.name,
-        type: 'receipt'
-      });
-
-      if (res.success) {
-        setSmsReceiptStatus({ success: true, message: `Receipt SMS sent successfully to ${phone}.` });
+      } else if (!targetPhone && isBusinessSmsEnabled) {
+        setSmsReceiptStatus({ success: false, message: 'No customer phone provided. Receipt SMS skipped.' });
+        showSuccess('Sale Completed', 'Sale completed successfully.');
       } else {
-        setSmsReceiptStatus({ success: false, message: res.message || 'Unable to deliver SMS receipt.' });
+        // SMS disabled for business
+        showSuccess('Sale Completed', 'Sale completed successfully.');
       }
+
+      onSaleComplete();
     } catch (err: any) {
-      setSmsReceiptStatus({ success: false, message: err?.message || 'Network error sending SMS.' });
+      console.error('Checkout processing error:', err);
+      showError('Checkout Error', err?.message || 'Failed to complete transaction.');
     } finally {
-      setIsSendingSmsReceipt(false);
+      setIsCompletingSale(false);
     }
   };
 
@@ -853,22 +974,6 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               onChange={(e) => setSearch(e.target.value)}
               className="block w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
             />
-          </div>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            {isMobileScannerActive && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-black animate-pulse shadow-xs">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
-                <span>Mobile Scanner Active</span>
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={handleOpenMobileScanner}
-              className="px-3.5 py-2 bg-emerald-900 hover:bg-emerald-950 text-emerald-100 font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shrink-0 shadow-sm border border-emerald-800"
-            >
-              <QrCode className="h-4 w-4 text-emerald-400" />
-              <span>Mobile Scanner</span>
-            </button>
           </div>
 
           {isServiceCategory && (
@@ -1165,18 +1270,30 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               </div>
             </header>
 
-            {/* Clear button overlay */}
-            {cart.length > 0 && (
-              <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Live Invoice Preview</span>
-                <button
-                  onClick={() => setCart([])}
-                  className="text-[10px] font-bold text-rose-600 hover:text-rose-700 cursor-pointer flex items-center gap-1 bg-rose-50 px-2 py-1 rounded"
-                >
-                  <Trash2 className="h-3 w-3" /> Clear Invoice
-                </button>
+            {/* Clear and Paused Orders toolbar */}
+            <div className="flex justify-between items-center py-2 border-b border-slate-100">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Live Invoice Preview</span>
+              <div className="flex items-center gap-1.5">
+                {pausedOrders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsPausedOrdersModalOpen(true)}
+                    className="text-[10px] font-bold text-amber-800 hover:text-amber-900 cursor-pointer flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg"
+                  >
+                    <History className="h-3 w-3 text-amber-600" /> Paused ({pausedOrders.length})
+                  </button>
+                )}
+                {cart.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setCart([])}
+                    className="text-[10px] font-bold text-rose-600 hover:text-rose-700 cursor-pointer flex items-center gap-1 bg-rose-50 px-2 py-1 rounded-lg"
+                  >
+                    <Trash2 className="h-3 w-3" /> Clear
+                  </button>
+                )}
               </div>
-            )}
+            </div>
 
             {/* Receipt Items List - dynamically expands to prevent hiding/collapsing rows */}
             <div className="space-y-3.5 py-4 flex-1">
@@ -1347,39 +1464,49 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               </div>
             </div>
 
-            {/* Optional Customer Phone for Automatic SMS Receipt */}
-            <div>
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                <span>Customer Phone (SMS Receipt)</span>
-                <span className="text-[9px] text-emerald-600 font-semibold lowercase">optional</span>
-              </label>
-              <input
-                type="tel"
-                value={checkoutCustomerPhone}
-                onChange={(e) => setCheckoutCustomerPhone(e.target.value)}
-                placeholder="e.g. 0244123456"
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs font-mono focus:ring-1 focus:ring-emerald-500 font-bold"
-              />
-            </div>
+            {/* Customer Phone for Automatic SMS Receipt (Conditional: Only if SMS is ENABLED for business in database) */}
+            {liveBusiness.smsEnabled !== false && (
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Customer Phone Number</span>
+                  <span className="text-[9px] text-emerald-600 font-semibold lowercase">for automatic SMS receipt</span>
+                </label>
+                <input
+                  type="tel"
+                  id="checkout-customer-phone-input"
+                  value={checkoutCustomerPhone}
+                  onChange={(e) => setCheckoutCustomerPhone(e.target.value)}
+                  placeholder="e.g. 0244123456"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs font-mono focus:ring-1 focus:ring-emerald-500 font-bold"
+                />
+              </div>
+            )}
 
             {/* Payment Method Selector */}
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Payment Method</label>
-              <div className="grid grid-cols-4 gap-2">
-                {(['cash', 'card', 'mobile', 'other'] as const).map((method, index) => (
+              <div className="grid grid-cols-5 gap-1.5">
+                {([
+                  { id: 'cash', label: 'Cash' },
+                  { id: 'mobile', label: 'MoMo' },
+                  { id: 'card', label: 'Card' },
+                  { id: 'credit', label: 'Credit' },
+                  { id: 'other', label: 'Other' }
+                ] as const).map(({ id, label }) => (
                   <button
-                    key={method || index}
+                    key={id}
+                    type="button"
                     onClick={() => {
-                      setPaymentMethod(method);
+                      setPaymentMethod(id);
                       setAmountReceived('');
                     }}
                     className={`py-2 rounded-xl text-[10px] font-bold uppercase text-center transition cursor-pointer ${
-                      paymentMethod === method
-                        ? 'bg-blue-600 text-white shadow-sm'
+                      paymentMethod === id
+                        ? (id === 'credit' ? 'bg-amber-600 text-white shadow-sm' : 'bg-blue-600 text-white shadow-sm')
                         : 'bg-white text-slate-600 border border-slate-200/80 hover:bg-slate-100'
                     }`}
                   >
-                    {method}
+                    {label}
                   </button>
                 ))}
               </div>
@@ -1424,21 +1551,76 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               </div>
             )}
 
-            {/* Quick Layout Customizer & Action Trigger */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            {/* Credit / Debt Payment Breakdown */}
+            {paymentMethod === 'credit' && (
+              <div className="bg-amber-50/60 border border-amber-200 p-3.5 rounded-2xl space-y-3">
+                <div className="flex justify-between items-center text-xs">
+                  <label className="block text-[10px] font-bold text-amber-900 uppercase tracking-wider">Credit Sale / Debt</label>
+                  <span className="text-[10px] font-mono font-bold text-amber-800 bg-white border border-amber-200 px-2 py-0.5 rounded">
+                    Total: {formatCurrency(total, business.currency)}
+                  </span>
+                </div>
+                {!selectedCustomerId && (
+                  <p className="text-[11px] font-bold text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                    Please select a registered customer above to link this credit debt to their profile.
+                  </p>
+                )}
+                <div>
+                  <label className="block text-[10px] font-bold text-amber-800 uppercase tracking-wider mb-1">
+                    Initial Deposit / Partial Payment (Optional)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none font-bold text-slate-400 text-xs">
+                      {getCurrencySymbol(business.currency)}
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={total}
+                      step="0.01"
+                      value={amountReceived}
+                      onChange={(e) => setAmountReceived(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                      className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-700 text-xs focus:ring-1 focus:ring-amber-500 font-bold font-mono"
+                      placeholder="0.00 (leave empty for full debt)"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-between items-center text-xs font-mono font-bold bg-white p-2.5 rounded-xl border border-amber-200">
+                  <span className="text-slate-600">Balance Owed (Debt):</span>
+                  <span className="text-rose-700 text-sm">
+                    {formatCurrency(Math.max(0, total - (Number(amountReceived) || 0)), business.currency)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Layout Customizer, Pause Order & Checkout Actions */}
+            <div className="grid grid-cols-3 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handlePauseOrder}
+                disabled={cart.length === 0}
+                title="Hold this cart and clear for next customer"
+                className="py-2.5 px-2 border border-amber-200 bg-amber-50/80 hover:bg-amber-100 text-amber-900 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Pause className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+                <span>Pause</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setIsReceiptCustomizing(true)}
-                className="py-2.5 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="py-2.5 px-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition cursor-pointer"
               >
-                <FileText className="h-4 w-4" /> Layout
+                <FileText className="h-3.5 w-3.5 text-slate-600 shrink-0" />
+                <span>Layout</span>
               </button>
               <button
+                id="btn-pos-complete-order"
                 onClick={handleCheckout}
-                disabled={cart.length === 0}
-                className="py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold disabled:opacity-30 cursor-pointer shadow-sm flex items-center justify-center gap-1.5 transition-colors active:scale-95"
+                disabled={cart.length === 0 || isCompletingSale}
+                className="py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold disabled:opacity-40 cursor-pointer shadow-sm flex items-center justify-center gap-1 transition-colors active:scale-95"
               >
-                Complete Order
+                <span>{isCompletingSale ? 'Processing...' : 'Complete Order'}</span>
               </button>
             </div>
           </div>
@@ -1519,66 +1701,43 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
             </div>
 
             <div className="space-y-2">
-              {/* Automatic SMS Receipt Dispatch Status */}
-              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                    <Send className="h-3.5 w-3.5 text-blue-600" /> Automatic SMS Receipt
-                  </p>
-                  {isSendingSmsReceipt && (
-                    <span className="flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
-                      <Loader2 className="h-3 w-3 animate-spin" /> Dispatching...
-                    </span>
+              {/* Automatic SMS Receipt Dispatch Status (Only when SMS is enabled for business) */}
+              {liveBusiness.smsEnabled !== false && (
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                      <Send className="h-3.5 w-3.5 text-blue-600" /> Automatic SMS Receipt
+                    </p>
+                    {isSendingSmsReceipt && (
+                      <span className="flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Dispatching...
+                      </span>
+                    )}
+                  </div>
+
+                  {smsReceiptStatus ? (
+                    <div className={`text-xs p-2 rounded-xl flex items-center gap-2 ${
+                      smsReceiptStatus.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                    }`}>
+                      {smsReceiptStatus.success ? (
+                        <Sparkles className="h-4 w-4 shrink-0 text-emerald-600" />
+                      ) : (
+                        <X className="h-4 w-4 shrink-0 text-rose-500" />
+                      )}
+                      <span className="flex-1 text-[11px] leading-tight">{smsReceiptStatus.message}</span>
+                    </div>
+                  ) : smsReceiptPhone ? (
+                    <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <span>Sending automated SMS to:</span>
+                      <span className="font-mono font-bold text-slate-800">{smsReceiptPhone}</span>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-400">
+                      No customer phone number provided during checkout.
+                    </p>
                   )}
                 </div>
-
-                {smsReceiptStatus ? (
-                  <div className={`text-xs p-2 rounded-xl flex items-center gap-2 ${
-                    smsReceiptStatus.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium' : 'bg-rose-50 text-rose-700 border border-rose-200'
-                  }`}>
-                    {smsReceiptStatus.success ? (
-                      <Sparkles className="h-4 w-4 shrink-0 text-emerald-600" />
-                    ) : (
-                      <X className="h-4 w-4 shrink-0 text-rose-500" />
-                    )}
-                    <span className="flex-1 text-[11px] leading-tight">{smsReceiptStatus.message}</span>
-                  </div>
-                ) : smsReceiptPhone ? (
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                    <span>Sending automated SMS to:</span>
-                    <span className="font-mono font-bold text-slate-800">{smsReceiptPhone}</span>
-                  </div>
-                ) : (
-                  <p className="text-[10px] text-slate-400">
-                    No customer phone number provided during checkout.
-                  </p>
-                )}
-
-                {/* Optional Resend / Manual input if needed */}
-                {(!smsReceiptStatus?.success || !smsReceiptPhone) && (
-                  <div className="flex gap-2 pt-1">
-                    <input
-                      type="tel"
-                      value={smsReceiptPhone}
-                      onChange={e => setSmsReceiptPhone(e.target.value)}
-                      placeholder="Enter phone to resend SMS..."
-                      className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                    <button
-                      onClick={handleSendSmsReceipt}
-                      disabled={isSendingSmsReceipt}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition shrink-0"
-                    >
-                      {isSendingSmsReceipt ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Send className="h-3 w-3" />
-                      )}
-                      <span>Resend</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
 
               <button
                 onClick={handlePrintSaleReceipt}
@@ -2044,20 +2203,82 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
           </div>
         </div>
       )}
-      {/* IN-APP MOBILE BARCODE SCANNER MODAL */}
-      <InAppMobileScannerModal
-        business={business}
-        user={user}
-        isOpen={isScannerModalOpen}
-        onClose={() => setIsScannerModalOpen(false)}
-        onScannerConnected={(sessionId) => {
-          setActiveScannerSessionId(sessionId);
-          setIsMobileScannerActive(true);
-        }}
-        onItemScanned={(item, type) => {
-          addToCart(item, type);
-        }}
-      />
+      {/* MODAL: Paused / Held Orders Modal */}
+      {isPausedOrdersModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 flex flex-col max-h-[85vh]">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-amber-50 text-amber-700 rounded-xl border border-amber-200">
+                  <History className="h-5 w-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-800 text-sm">Paused Orders ({pausedOrders.length})</h4>
+                  <p className="text-[11px] text-slate-400">Restore or discard held customer transactions</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsPausedOrdersModalOpen(false)}
+                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-4 space-y-3 flex-1">
+              {pausedOrders.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">
+                  No held orders in queue.
+                </div>
+              ) : (
+                pausedOrders.map((po) => (
+                  <div key={po.id} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-xs text-slate-800 truncate">{po.label}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {new Date(po.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {po.cart.map(c => `${c.quantity}x ${c.name}`).join(', ')}
+                      </p>
+                      <p className="text-xs font-mono font-bold text-emerald-700">
+                        {formatCurrency(po.total, business.currency)} ({po.cart.reduce((a, c) => a + c.quantity, 0)} items)
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => handleResumeOrder(po)}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition shadow-xs"
+                      >
+                        <Play className="h-3 w-3" /> Resume
+                      </button>
+                      <button
+                        onClick={() => handleDiscardPausedOrder(po.id)}
+                        className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl border border-rose-200 cursor-pointer transition"
+                        title="Discard paused order"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setIsPausedOrdersModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

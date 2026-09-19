@@ -2,6 +2,6 @@
   "name": "BusinessOS",
   "description": "Complete Multi-Tenant Cloud POS & Business Operating System featuring private business workspaces, robust user roles, real-time inventory, sales, expenses, and powerful analytics.",
   "publisher": "Legacy Inc",
-  "requestFramePermissions": ["camera"],
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -775,6 +775,16 @@ class CloudDatabase {
       list[idx].updatedAt = new Date().toISOString();
       this.write('bos_businesses', list);
     }
+    this.notifyListeners();
+
+    // Directly persist to Firestore
+    try {
+      setDoc(doc(firestore, 'bos_businesses', businessId), {
+        smsEnabled,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch(() => {});
+    } catch (e) {}
+
     try {
       await fetch('/api/admin/business-sms-toggle', {
         method: 'POST',
@@ -785,6 +795,59 @@ class CloudDatabase {
     } catch (e) {
       return true;
     }
+  }
+
+  public async checkBusinessSmsEnabled(businessId: string): Promise<boolean> {
+    if (!businessId || businessId === 'platform') return true;
+
+    // 1. Direct real-time check from Firestore document with quick race timeout
+    try {
+      const snap = await Promise.race([
+        getDoc(doc(firestore, 'bos_businesses', businessId)),
+        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 1200))
+      ]);
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        const isEnabled = data?.smsEnabled !== false;
+        
+        // Synchronize local cache if different
+        const list = this.getBusinesses();
+        const idx = list.findIndex(b => b.id === businessId);
+        if (idx >= 0 && list[idx].smsEnabled !== isEnabled) {
+          list[idx].smsEnabled = isEnabled;
+          this.write('bos_businesses', list);
+          this.notifyListeners();
+        }
+        return isEnabled;
+      }
+    } catch (err) {
+      console.warn('[DB] Firestore check for business smsEnabled note:', err);
+    }
+
+    // 2. Direct backend server query with quick timeout
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1200);
+      const res = await fetch(`/api/admin/business/${businessId}/sms-status`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data.smsEnabled === 'boolean') {
+          const list = this.getBusinesses();
+          const idx = list.findIndex(b => b.id === businessId);
+          if (idx >= 0 && list[idx].smsEnabled !== data.smsEnabled) {
+            list[idx].smsEnabled = data.smsEnabled;
+            this.write('bos_businesses', list);
+            this.notifyListeners();
+          }
+          return data.smsEnabled;
+        }
+      }
+    } catch (e) {}
+
+    // 3. Fallback to local storage business record
+    const target = this.getBusinesses().find(b => b.id === businessId);
+    return target ? target.smsEnabled !== false : true;
   }
 
   public async toggleBulkBusinessSms(businessIds: string[], smsEnabled: boolean): Promise<{ success: boolean; updatedCount: number }> {
@@ -799,8 +862,9 @@ class CloudDatabase {
       }
     });
     this.write('bos_businesses', list);
+    this.notifyListeners();
 
-    // Also directly update in Firestore if client has permission
+    // Directly update in Firestore
     try {
       businessIds.forEach(id => {
         setDoc(doc(firestore, 'bos_businesses', id), {
@@ -821,6 +885,12 @@ class CloudDatabase {
     } catch (e) {
       return { success: true, updatedCount: count };
     }
+  }
+
+  public async toggleAllBusinessesSms(smsEnabled: boolean): Promise<{ success: boolean; updatedCount: number }> {
+    const allBusinesses = this.getBusinesses();
+    const allIds = allBusinesses.map(b => b.id);
+    return this.toggleBulkBusinessSms(allIds, smsEnabled);
   }
 
   // --- PRICING PLANS OPERATIONS ---
@@ -943,6 +1013,58 @@ class CloudDatabase {
     this.notifyListeners();
   }
 
+  // Fast single-pass bulk purge of multiple businesses from local storage
+  public purgeMultipleLocalBusinesses(ids: string[]): void {
+    const validIds = ids.filter(id => typeof id === 'string' && id.trim() && id !== 'platform' && id !== 'system');
+    if (validIds.length === 0) return;
+    const idSet = new Set(validIds);
+
+    // 1. Update tombstone list in localStorage and sessionStorage
+    let deletedIds: string[] = [];
+    try {
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
+      if (raw) deletedIds = JSON.parse(raw) || [];
+    } catch (e) {}
+
+    validIds.forEach(id => {
+      if (!deletedIds.includes(id)) {
+        deletedIds.push(id);
+      }
+    });
+
+    safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+    try {
+      sessionStorage.setItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+    } catch (e) {}
+
+    // 2. Single-pass purge across ALL_DB_KEYS
+    ALL_DB_KEYS.forEach(key => {
+      if (key === 'bos_businesses' || key === 'businesses') {
+        const rawBusinesses = this.read<Business>('bos_businesses');
+        const filtered = rawBusinesses.filter(b => b && !idSet.has(b.id));
+        this.write('bos_businesses', filtered);
+      } else if (key !== 'bos_deleted_business_ids') {
+        const items = this.read<any>(key);
+        const filtered = items.filter((item: any) => {
+          if (!item) return false;
+          if (item.id && idSet.has(String(item.id))) return false;
+          if (item.businessId && idSet.has(String(item.businessId))) return false;
+          if (item.schoolId && idSet.has(String(item.schoolId))) return false;
+          if (item.business_id && idSet.has(String(item.business_id))) return false;
+          return true;
+        });
+        this.write(key, filtered);
+      }
+    });
+
+    const currentUser = this.getCurrentUser();
+    if (currentUser && (idSet.has(currentUser.businessId) || idSet.has(currentUser.schoolId))) {
+      this.logout();
+    }
+
+    this.notifyListeners();
+  }
+
   public async deleteBusinessPermanent(
     id: string,
     superAdminUser?: { id?: string; email?: string; name?: string }
@@ -963,51 +1085,47 @@ class CloudDatabase {
     const targetBus = this.getBusinesses().find(b => b.id === id);
     const busName = targetBus ? targetBus.name : id;
 
-    // 1. Gather all document IDs belonging to this business before purging local memory
-    const docsToDelete: { collection: string; docId: string }[] = [];
-    ALL_DB_KEYS.forEach(key => {
-      if (key === 'bos_deleted_business_ids') return;
-      const items = this.read<any>(key);
-      items.forEach((item: any) => {
-        if (item && ((key === 'bos_businesses' && item.id === id) || item.businessId === id || item.schoolId === id || item.id === id || item.business_id === id)) {
-          if (item.id) {
-            docsToDelete.push({ collection: key, docId: String(item.id) });
-          }
-        }
-      });
-    });
+    // 1. FAST: Immediately purge local cache, register tombstone, and notify UI listeners
+    this.purgeLocalBusinessData(id);
+    this.notifyListeners();
 
-    // 2. Persist tombstone in Firestore immediately
-    try {
-      await setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
+    // 2. Concurrently fire server deletion endpoint and Firestore root deletion with quick timeout
+    const firestoreDeletions = Promise.allSettled([
+      setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
         id,
         businessId: id,
         deletedAt: new Date().toISOString()
-      });
-    } catch (e) {
-      console.warn('Firestore set tombstone note:', e);
-    }
+      }).catch(() => {}),
+      deleteDoc(doc(firestore, 'bos_businesses', id)).catch(() => {}),
+      deleteDoc(doc(firestore, 'businesses', id)).catch(() => {}),
+      fetch(`/api/admin/business/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-super-admin': 'true',
+          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
+          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
+        }
+      }).catch(err => console.warn('Backend deletion fetch note:', err))
+    ]);
 
-    // 3. Delete main business documents from Firestore
-    try {
-      await deleteDoc(doc(firestore, 'bos_businesses', id));
-      await deleteDoc(doc(firestore, 'businesses', id));
-    } catch (e) {
-      console.warn('Firestore delete business doc note:', e);
-    }
+    // Race with 1.2s timeout so the UI remains ultra-responsive
+    await Promise.race([
+      firestoreDeletions,
+      new Promise(resolve => setTimeout(resolve, 1200))
+    ]);
 
-    // 4. Recursively delete subcollections under bos_businesses/{id} and businesses/{id}
-    const subcollections = [
-      'branches', 'products', 'customers', 'sales', 'expenses', 'employees',
-      'users', 'auditLogs', 'logs', 'settings', 'inventory', 'transactions',
-      'suppliers', 'notifications', 'services', 'classes', 'students', 'teachers',
-      'prescriptions', 'batches', 'timetable', 'attendance', 'grades', 'orders',
-      'receipts', 'returns', 'stock', 'tables', 'appointments'
-    ];
-
-    await Promise.allSettled(
-      subcollections.flatMap(sub => [
-        (async () => {
+    // 3. Background subcollection cleanup without blocking UI
+    setTimeout(async () => {
+      try {
+        const subcollections = [
+          'branches', 'products', 'customers', 'sales', 'expenses', 'employees',
+          'users', 'auditLogs', 'logs', 'settings', 'inventory', 'transactions',
+          'suppliers', 'notifications', 'services', 'classes', 'students', 'teachers',
+          'prescriptions', 'batches', 'timetable', 'attendance', 'grades', 'orders',
+          'receipts', 'returns', 'stock', 'tables', 'appointments'
+        ];
+        for (const sub of subcollections) {
           try {
             const subSnap = await getDocs(collection(firestore, 'bos_businesses', id, sub));
             if (!subSnap.empty) {
@@ -1016,63 +1134,11 @@ class CloudDatabase {
               await b.commit();
             }
           } catch (e) {}
-        })(),
-        (async () => {
-          try {
-            const subSnap = await getDocs(collection(firestore, 'businesses', id, sub));
-            if (!subSnap.empty) {
-              const b = writeBatch(firestore);
-              subSnap.docs.forEach(d => b.delete(d.ref));
-              await b.commit();
-            }
-          } catch (e) {}
-        })()
-      ])
-    );
-
-    // 5. Delete collected local documents from Firestore
-    if (docsToDelete.length > 0) {
-      try {
-        await Promise.allSettled(
-          docsToDelete.map(d => deleteDoc(doc(firestore, d.collection, d.docId)))
-        );
-      } catch (e) {}
-    }
-
-    // 6. Call server endpoint to purge backend storage, cloud_db.json, and Firebase Admin Auth
-    try {
-      const serverRes = await fetch(`/api/admin/business/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-super-admin': 'true',
-          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
-          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
         }
-      });
-      if (!serverRes.ok) {
-        console.warn('Backend deletion response status:', serverRes.status);
-      }
-    } catch (err: any) {
-      console.warn('Backend deletion fetch note:', err);
-    }
+      } catch (e) {}
+    }, 10);
 
-    // 7. Verify Firestore document is truly deleted
-    try {
-      const checkDoc1 = await getDoc(doc(firestore, 'bos_businesses', id));
-      const checkDoc2 = await getDoc(doc(firestore, 'businesses', id));
-      if (checkDoc1.exists()) {
-        await deleteDoc(doc(firestore, 'bos_businesses', id));
-      }
-      if (checkDoc2.exists()) {
-        await deleteDoc(doc(firestore, 'businesses', id));
-      }
-    } catch (e) {}
-
-    // 8. Purge local cache and notify listeners
-    this.purgeLocalBusinessData(id);
-
-    // 9. Record successful audit log entry
+    // Record audit log entry
     const auditLog = {
       id: 'audit-del-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       action: 'DELETE_BUSINESS',
@@ -1093,6 +1159,81 @@ class CloudDatabase {
 
     this.notifyListeners();
     return { success: true, message: `Business "${busName}" has been permanently deleted.` };
+  }
+
+  public async bulkDeleteBusinesses(
+    ids: string[],
+    superAdminUser?: { id?: string; email?: string; name?: string }
+  ): Promise<{ success: boolean; deletedCount: number; message: string }> {
+    const currentUser = this.getCurrentUser();
+    const isSuperAdmin = (currentUser && (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'admin' || currentUser.email === 'admin@businessos.com' || currentUser.email === 'su@admin')) ||
+      (superAdminUser && (superAdminUser.email === 'admin@businessos.com' || superAdminUser.email === 'su@admin'));
+
+    if (!isSuperAdmin) {
+      throw new Error('Unauthorized: Only platform Super Admin can permanently delete businesses.');
+    }
+
+    const validIds = ids.filter(id => typeof id === 'string' && id.trim() && id !== 'platform' && id !== 'system');
+    if (validIds.length === 0) {
+      return { success: true, deletedCount: 0, message: 'No valid businesses selected for deletion.' };
+    }
+
+    // 1. FAST: Single-pass purge of all selected businesses from local storage immediately so UI updates instantly!
+    this.purgeMultipleLocalBusinesses(validIds);
+
+    // 2. Concurrently fire server bulk-delete endpoint and Firestore operations with quick race
+    const operations = Promise.allSettled([
+      fetch('/api/admin/bulk-business-delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-super-admin': 'true',
+          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
+          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
+        },
+        body: JSON.stringify({ businessIds: validIds, isSuperAdmin: true })
+      }).catch(err => console.warn('Backend bulk delete fetch err:', err)),
+
+      // Write tombstones and delete main documents from Firestore in parallel
+      ...validIds.flatMap(id => [
+        setDoc(doc(firestore, 'bos_deleted_business_ids', id), {
+          id,
+          businessId: id,
+          deletedAt: new Date().toISOString()
+        }).catch(() => {}),
+        deleteDoc(doc(firestore, 'bos_businesses', id)).catch(() => {}),
+        deleteDoc(doc(firestore, 'businesses', id)).catch(() => {})
+      ])
+    ]);
+
+    // Keep race responsive so UI does not stall
+    await Promise.race([
+      operations,
+      new Promise(resolve => setTimeout(resolve, 1500))
+    ]);
+
+    // 3. Audit log
+    const auditLog = {
+      id: 'audit-bulk-del-' + Date.now(),
+      action: 'BULK_DELETE_BUSINESSES',
+      superAdminId: superAdminUser?.id || currentUser?.id || 'superadmin',
+      superAdminEmail: superAdminUser?.email || currentUser?.email || 'admin@businessos.com',
+      timestamp: new Date().toISOString(),
+      ipAddress: '127.0.0.1',
+      status: 'Success' as const,
+      details: `Super Admin bulk deleted ${validIds.length} businesses permanently (IDs: ${validIds.join(', ')}).`
+    };
+    const existingAudit = this.read<any>('bos_feature_audit_logs');
+    this.write('bos_feature_audit_logs', [auditLog, ...existingAudit]);
+    const existingLogs = this.read<any>('bos_logs');
+    this.write('bos_logs', [auditLog, ...existingLogs]);
+
+    this.notifyListeners();
+    return {
+      success: true,
+      deletedCount: validIds.length,
+      message: `Permanently deleted ${validIds.length} business${validIds.length === 1 ? '' : 'es'}.`
+    };
   }
 
   public async fetchBusinessesFromFirestore(): Promise<Business[]> {

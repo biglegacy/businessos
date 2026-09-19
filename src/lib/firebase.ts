@@ -1,6 +1,12 @@
 import { initializeApp, getApps, getApp, setLogLevel } from 'firebase/app';
 import { initializeFirestore, doc, setDoc, deleteDoc, collection, onSnapshot, query, where, getDocs, getDocFromServer, getDoc, writeBatch } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
+import {
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
+  inMemoryPersistence,
+  getAuth
+} from 'firebase/auth';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
 import config from '../../firebase-applet-config.json';
 
@@ -37,10 +43,30 @@ async function testConnection() {
     }
   }
 }
-testConnection();
+testConnection().catch(() => {});
 
-// Initialize Firebase Auth
-export const auth = getAuth(app);
+// Initialize Firebase Auth safely with resilient local persistence
+let authInstance: any;
+try {
+  if (typeof window !== 'undefined') {
+    authInstance = initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence]
+    });
+  } else {
+    authInstance = getAuth(app);
+  }
+} catch {
+  try {
+    authInstance = getAuth(app);
+  } catch {
+    authInstance = {
+      currentUser: null,
+      onAuthStateChanged: () => () => {},
+    } as any;
+  }
+}
+
+export const auth = authInstance;
 
 // Initialize Firebase Storage
 export const storage = getStorage(app);

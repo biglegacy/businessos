@@ -674,27 +674,27 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
         )}
 
         {/* ABOUT & PUBLISHER METADATA */}
-        <div className="bg-slate-900 text-white p-6 rounded-3xl border border-slate-800 shadow-sm space-y-3 text-xs">
+        <div className="bg-white text-slate-800 p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3 text-xs">
           <div className="flex items-center justify-between">
-            <h4 className="font-bold text-sm text-emerald-400 flex items-center gap-1.5">
+            <h4 className="font-bold text-sm text-emerald-700 flex items-center gap-1.5">
               <Sparkles className="h-4 w-4" /> About BusinessOS
             </h4>
-            <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold">
+            <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-mono font-bold">
               v4.2 Cloud
             </span>
           </div>
-          <div className="space-y-1.5 text-slate-300 font-mono text-[11px] border-t border-slate-800 pt-3">
+          <div className="space-y-1.5 text-slate-600 font-mono text-[11px] border-t border-slate-100 pt-3">
             <div className="flex justify-between">
-              <span className="text-slate-500">Publisher:</span>
-              <span className="font-bold text-white">Legacy Inc</span>
+              <span className="text-slate-400">Publisher:</span>
+              <span className="font-bold text-slate-800">Legacy Inc</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">Architecture:</span>
-              <span className="text-slate-300">Cloud-Connected Enterprise OS</span>
+              <span className="text-slate-400">Architecture:</span>
+              <span className="text-slate-600">Cloud-Connected Enterprise OS</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">Workspace Type:</span>
-              <span className="text-emerald-400 font-bold">{business.category || business.businessType || 'General Retail'}</span>
+              <span className="text-slate-400">Workspace Type:</span>
+              <span className="text-emerald-700 font-bold">{business.category || business.businessType || 'General Retail'}</span>
             </div>
           </div>
         </div>

@@ -348,10 +348,11 @@ export interface Sale {
   subtotal?: number;
   discount: number; // percentage or fixed
   total: number;
-  paymentMethod: 'cash' | 'card' | 'mobile' | 'other';
+  paymentMethod: 'cash' | 'card' | 'mobile' | 'credit' | 'other';
   paymentStatus?: 'paid' | 'partial' | 'pending' | 'unpaid';
   amountPaid?: number;
   amountReceived?: number;
+  amountOwed?: number;
   change?: number;
   customerId?: string;
   customerName?: string;
@@ -363,6 +364,9 @@ export interface Sale {
   createdAt: string;
   status?: 'completed' | 'refunded';
   currency?: string;
+  smsStatus?: 'Sent' | 'Failed' | 'Skipped — no phone' | 'Skipped — SMS disabled' | 'Pending';
+  smsStatusMessage?: string;
+  smsStatusDetail?: string;
 }
 
 export type SaleItem = Sale['items'][number];

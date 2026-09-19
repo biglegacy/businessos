@@ -143,25 +143,25 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               onClick={() => onSelectTab(item.targetTab)}
               className={`flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-2xl min-h-[50px] transition-all cursor-pointer relative select-none touch-manipulation active:scale-95 ${
                 isActive 
-                  ? 'text-blue-600 font-bold' 
+                  ? 'text-emerald-700 font-bold' 
                   : 'text-slate-600 hover:text-slate-900 font-medium'
               }`}
             >
               <div className="relative">
-                <div className={`p-1 rounded-xl transition-colors ${isActive ? 'bg-blue-50 text-blue-600' : ''}`}>
+                <div className={`p-1 rounded-xl transition-colors ${isActive ? 'bg-emerald-50 text-emerald-700' : ''}`}>
                   <IconComponent className={`h-5 w-5 transition-transform ${isActive ? 'scale-110' : ''}`} />
                 </div>
                 {item.badge !== undefined && item.badge > 0 && (
-                  <span className="absolute -top-1 -right-2 bg-blue-600 text-white rounded-full text-[9px] font-black h-4 w-4 flex items-center justify-center border-2 border-white shadow-xs animate-pulse">
+                  <span className="absolute -top-1 -right-2 bg-emerald-600 text-white rounded-full text-[9px] font-black h-4 w-4 flex items-center justify-center border-2 border-white shadow-xs animate-pulse">
                     {item.badge > 99 ? '99+' : item.badge}
                   </span>
                 )}
               </div>
-              <span className={`text-[10px] mt-0.5 tracking-tight ${isActive ? 'font-extrabold text-blue-600' : 'text-slate-500'}`}>
+              <span className={`text-[10px] mt-0.5 tracking-tight ${isActive ? 'font-extrabold text-emerald-700' : 'text-slate-500'}`}>
                 {item.label}
               </span>
               {isActive && (
-                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-0.5" />
+                <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full mt-0.5" />
               )}
             </button>
           );
