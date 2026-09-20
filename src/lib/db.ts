@@ -3056,8 +3056,8 @@ class CloudDatabase {
     return {
       success: false,
       provider: 'Arkesel',
-      senderId: 'BusinessOS',
-      apiEndpoint: 'https://sms.arkesel.com/api/v2/sms/send',
+      senderId: 'Legacy Inc',
+      apiEndpoint: 'https://sms.arkesel.com/sms/api?action=send-sms',
       isEnabled: true,
       hasApiKey: false,
       maskedApiKey: '',

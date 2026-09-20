@@ -1,10 +1,10 @@
 {
   "apiKey": "QldvUUtlbVFhSmtTY25jYmRldXI",
-  "senderId": "BusinessOS",
-  "apiEndpoint": "https://sms.arkesel.com/api/v2/sms/send",
+  "senderId": "Legacy Inc",
+  "apiEndpoint": "https://sms.arkesel.com/sms/api?action=send-sms",
   "isEnabled": true,
-  "totalSentCount": 0,
-  "lastTestedAt": "2026-09-18T08:36:16.144Z",
+  "lastTestedAt": "2026-09-20T11:56:16.367Z",
   "lastTestStatus": "Active & Connected",
-  "lastTestMessage": "Connection verified. Balance: 589"
+  "lastTestMessage": "Instant carrier route verified (Legacy Inc)",
+  "totalSentCount": 0
 }

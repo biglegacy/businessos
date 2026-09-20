@@ -4245,14 +4245,117 @@
     {
       "id": "global",
       "apiKey": "QldvUUtlbVFhSmtTY25jYmRldXI",
-      "senderId": "BusinessOS",
-      "apiEndpoint": "https://sms.arkesel.com/api/v2/sms/send",
+      "senderId": "Legacy Inc",
+      "apiEndpoint": "https://sms.arkesel.com/sms/api?action=send-sms",
       "isEnabled": true,
-      "totalSentCount": 0,
-      "lastTestedAt": "2026-09-18T08:36:16.144Z",
+      "lastTestedAt": "2026-09-20T11:56:20.286Z",
       "lastTestStatus": "Active & Connected",
-      "lastTestMessage": "Connection verified. Balance: 589",
-      "updatedAt": "2026-09-18T08:36:16.147Z"
+      "lastTestMessage": "Instant carrier direct route active",
+      "totalSentCount": 0,
+      "updatedAt": "2026-09-20T11:56:20.292Z"
+    }
+  ],
+  "bos_notification_logs": [
+    {
+      "id": "sms-log-1789905477981-4898",
+      "businessId": "platform",
+      "recipient": "233277653421",
+      "message": "[Legacy Inc] Receipt test #8842. Total: GHS 60.00. Paid in full. Thank you!",
+      "sender": "Legacy Inc",
+      "status": "Successfully sent",
+      "success": true,
+      "type": "transactional",
+      "timestamp": "2026-09-20T11:57:57.982Z",
+      "timings": {
+        "backendReceivedTime": 1789905476186,
+        "arkeselRequestStartTime": 1789905476192,
+        "arkeselResponseTime": 1789905477978,
+        "submissionCompletionTime": 1789905477978,
+        "arkeselLatencyMs": 1786,
+        "totalSubmissionMs": 1792
+      },
+      "details": "{\"code\":\"ok\",\"message\":\"Successfully Sent\",\"balance\":543,\"main_balance\":0.095,\"user\":\"Legacy Inc\"}"
+    },
+    {
+      "id": "sms-log-1789905473096-rrtz",
+      "businessId": "platform",
+      "recipient": "233208002240",
+      "message": "[Legacy Inc] Receipt test #8841. Total: GHS 45.00. Paid in full. Thank you!",
+      "sender": "Legacy Inc",
+      "status": "Successfully sent",
+      "success": true,
+      "type": "transactional",
+      "timestamp": "2026-09-20T11:57:53.096Z",
+      "timings": {
+        "backendReceivedTime": 1789905471209,
+        "arkeselRequestStartTime": 1789905471209,
+        "arkeselResponseTime": 1789905473091,
+        "submissionCompletionTime": 1789905473091,
+        "arkeselLatencyMs": 1882,
+        "totalSubmissionMs": 1882
+      },
+      "details": "{\"code\":\"ok\",\"message\":\"Successfully Sent\",\"balance\":544,\"main_balance\":0.095,\"user\":\"Legacy Inc\"}"
+    },
+    {
+      "id": "sms-log-1789904729391-bhdq",
+      "businessId": "platform",
+      "recipient": "233208002240",
+      "message": "[ragemagic41's Workspace] BusinessOS SMS configuration test successful.",
+      "sender": "Ragemagic41",
+      "status": "Successfully sent",
+      "success": true,
+      "type": "test_sms",
+      "timestamp": "2026-09-20T11:45:29.391Z",
+      "timings": {
+        "clientTriggerTime": 1789904723551,
+        "backendReceivedTime": 1789904727000,
+        "arkeselRequestStartTime": 1789904727001,
+        "arkeselResponseTime": 1789904729383,
+        "submissionCompletionTime": 1789904729387,
+        "arkeselLatencyMs": 2382,
+        "totalSubmissionMs": 5836
+      },
+      "details": "{\"data\":[{\"id\":\"65f4e8c4-904f-42e1-85e3-4861a46c3a47\",\"recipient\":\"233208002240\"}],\"status\":\"success\",\"main_balance\":0.13,\"sms_balance\":558}"
+    },
+    {
+      "id": "sms-log-1789904390932-li2k",
+      "businessId": "platform",
+      "recipient": "233277653421",
+      "message": "Test receipt from Legacy Inc - AirtelTigo verified",
+      "sender": "LegacyInc",
+      "status": "Successfully sent",
+      "success": true,
+      "type": "test_sms",
+      "timestamp": "2026-09-20T11:39:50.932Z",
+      "timings": {
+        "backendReceivedTime": 1789904388160,
+        "arkeselRequestStartTime": 1789904388161,
+        "arkeselResponseTime": 1789904390927,
+        "submissionCompletionTime": 1789904390928,
+        "arkeselLatencyMs": 2766,
+        "totalSubmissionMs": 2768
+      },
+      "details": "{\"data\":[{\"id\":\"83c34b68-ab81-4756-878f-970897d7df2a\",\"recipient\":\"233277653421\"}],\"status\":\"success\",\"main_balance\":0.13,\"sms_balance\":559}"
+    },
+    {
+      "id": "sms-log-1789904385329-5vk5",
+      "businessId": "platform",
+      "recipient": "233208002240",
+      "message": "Test receipt from Legacy Inc - Telecel verified",
+      "sender": "LegacyInc",
+      "status": "Successfully sent",
+      "success": true,
+      "type": "test_sms",
+      "timestamp": "2026-09-20T11:39:45.329Z",
+      "timings": {
+        "backendReceivedTime": 1789904382472,
+        "arkeselRequestStartTime": 1789904382473,
+        "arkeselResponseTime": 1789904385321,
+        "submissionCompletionTime": 1789904385325,
+        "arkeselLatencyMs": 2848,
+        "totalSubmissionMs": 2853
+      },
+      "details": "{\"data\":[{\"id\":\"0df3b67b-3949-4c6e-82df-32e37d8f29a9\",\"recipient\":\"233208002240\"}],\"status\":\"success\",\"main_balance\":0.13,\"sms_balance\":560}"
     }
   ]
 }

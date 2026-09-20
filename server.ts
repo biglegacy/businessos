@@ -196,8 +196,8 @@ export interface ArkeselServerConfig {
 function readSmsConfig(): ArkeselServerConfig {
   const defaultConfig: ArkeselServerConfig = {
     apiKey: process.env.ARKESEL_API_KEY || '',
-    senderId: process.env.ARKESEL_SENDER_ID || 'BusinessOS',
-    apiEndpoint: process.env.ARKESEL_SMS_ENDPOINT || 'https://sms.arkesel.com/api/v2/sms/send',
+    senderId: process.env.ARKESEL_SENDER_ID || 'Legacy Inc',
+    apiEndpoint: process.env.ARKESEL_SMS_ENDPOINT || 'https://sms.arkesel.com/sms/api?action=send-sms',
     isEnabled: true,
     totalSentCount: 0
   };
@@ -344,8 +344,8 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
         const d = docSnap.data() as any;
         const config: ArkeselServerConfig = {
           apiKey: d.apiKey || inMemorySmsConfig.apiKey || '',
-          senderId: d.senderId || inMemorySmsConfig.senderId || 'BusinessOS',
-          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+          senderId: d.senderId || inMemorySmsConfig.senderId || 'Legacy Inc',
+          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
           isEnabled: d.isEnabled !== false,
           lastTestedAt: d.lastTestedAt,
           lastTestStatus: d.lastTestStatus,
@@ -371,8 +371,8 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
         const d = doc.data() as any;
         const config: ArkeselServerConfig = {
           apiKey: d.apiKey || inMemorySmsConfig.apiKey || '',
-          senderId: d.senderId || inMemorySmsConfig.senderId || 'BusinessOS',
-          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+          senderId: d.senderId || inMemorySmsConfig.senderId || 'Legacy Inc',
+          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
           isEnabled: d.isEnabled !== false,
           lastTestedAt: d.lastTestedAt,
           lastTestStatus: d.lastTestStatus,
@@ -401,8 +401,8 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
         if (d?.fields) {
           const config: ArkeselServerConfig = {
             apiKey: d.fields.apiKey?.stringValue || inMemorySmsConfig.apiKey || '',
-            senderId: d.fields.senderId?.stringValue || inMemorySmsConfig.senderId || 'BusinessOS',
-            apiEndpoint: d.fields.apiEndpoint?.stringValue || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send',
+            senderId: d.fields.senderId?.stringValue || inMemorySmsConfig.senderId || 'Legacy Inc',
+            apiEndpoint: d.fields.apiEndpoint?.stringValue || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
             isEnabled: d.fields.isEnabled?.booleanValue !== false,
             lastTestedAt: d.fields.lastTestedAt?.stringValue,
             lastTestStatus: d.fields.lastTestStatus?.stringValue,
@@ -508,35 +508,54 @@ function logSmsActivityAsync(entry: {
 }
 
 // Format registered business name into an Arkesel & telecom compliant GSM Sender ID
-// Strictly alphanumeric [a-zA-Z0-9], NO SPACES (Telecel and AirtelTigo SMPP SMSCs strictly reject spaces), max 11 characters
-function formatSenderIdFromBusinessName(businessName: string, fallback = 'BusinessOS'): string {
+// Supports alphanumeric characters and valid internal spaces (e.g. "Legacy Inc", 10 chars), max 11 characters
+function formatSenderIdFromBusinessName(businessName: string, fallback = 'Legacy Inc'): string {
+  const defaultFallback = (fallback || 'Legacy Inc').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim().slice(0, 11) || 'Legacy Inc';
   if (!businessName || !businessName.trim()) {
-    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
+    return defaultFallback;
   }
 
-  // Split into alphanumeric word tokens
-  const words = businessName
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
+  // Clean special characters but preserve single internal spaces
+  let cleaned = businessName.trim().replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return defaultFallback;
 
-  if (words.length === 0) {
-    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
+  // If length is already <= 11, it is a valid GSM/Arkesel Sender ID (e.g., "Legacy Inc", 10 chars)
+  if (cleaned.length <= 11) {
+    return cleaned;
   }
 
-  // Capitalize each word into PascalCase and join without spaces (GSM standard for Telecel, AirtelTigo, MTN)
-  let pascal = words
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join('');
-
-  pascal = pascal.replace(/[^a-zA-Z0-9]/g, '');
-
-  if (!pascal) {
-    return (fallback || 'BusinessOS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 11) || 'BusinessOS';
+  // If > 11 chars, try PascalCase without spaces
+  const words = cleaned.split(' ').filter(Boolean);
+  const pascal = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  if (pascal.length <= 11) {
+    return pascal;
   }
 
-  // Cap at 11 characters strictly per telecom specifications
+  // If first word alone is descriptive and <= 11 chars (e.g. "Acapulco" from "Acapulco Foods")
+  if (words[0] && words[0].length >= 3 && words[0].length <= 11) {
+    return words[0];
+  }
+
   return pascal.slice(0, 11);
+}
+
+// Detect recipient mobile operator in Ghana for carrier-optimized routing
+function detectGhanaNetwork(phone: string): { network: 'MTN' | 'Telecel' | 'AirtelTigo' | 'Other'; isGhana: boolean } {
+  const norm = normalizePhoneNumber(phone);
+  if (norm.startsWith('233') && norm.length === 12) {
+    const prefix = norm.substring(3, 5);
+    if (['24', '54', '55', '59', '53'].includes(prefix)) {
+      return { network: 'MTN', isGhana: true };
+    }
+    if (['20', '50'].includes(prefix)) {
+      return { network: 'Telecel', isGhana: true };
+    }
+    if (['27', '57', '26', '56'].includes(prefix)) {
+      return { network: 'AirtelTigo', isGhana: true };
+    }
+    return { network: 'Other', isGhana: true };
+  }
+  return { network: 'Other', isGhana: false };
 }
 
 // Lightweight in-memory business metadata cache to avoid disk I/O on critical SMS path
@@ -583,7 +602,7 @@ function resolveRegisteredBusinessName(businessId?: string, businessName?: strin
     const activeBus = businesses.find((b: any) => b && b.name && b.smsEnabled !== false) || businesses.find((b: any) => b && b.name);
     if (activeBus?.name) return activeBus.name;
   } catch {}
-  return '';
+  return 'Legacy Inc';
 }
 
 // Reusable server-side Arkesel SMS dispatch service — optimized for sub-second, direct execution
@@ -769,12 +788,11 @@ async function dispatchArkeselSms({
     };
   }
 
-  const endpoint = config.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
+  const configuredEndpoint = config.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms';
 
   // Determine Sender ID for universal multi-network delivery (MTN, Telecel, AirtelTigo):
-  // 1. Telecom regulations mandate strictly alphanumeric sender IDs <= 11 chars with NO SPACES.
-  // 2. User mandate: When SMS receipt is sent to customers, the sender's name MUST be the name of the registered business.
-  const registeredApprovedSender = formatSenderIdFromBusinessName(config.senderId || 'BusinessOS');
+  // User mandate: When SMS receipt is sent to customers, the sender's name MUST be the name of the registered business.
+  const registeredApprovedSender = formatSenderIdFromBusinessName(config.senderId || 'Legacy Inc');
   
   // Resolve the registered business name
   let effectiveSender = registeredApprovedSender;
@@ -784,113 +802,132 @@ async function dispatchArkeselSms({
     effectiveSender = formatSenderIdFromBusinessName(senderId, registeredApprovedSender);
   }
 
-  // Build payload: Note that use_case is omitted for Ghana (+233) traffic per Arkesel telecom routing specifications
-  const payload: any = {
-    sender: effectiveSender,
-    message: trimmedMessage,
-    recipients: cleanedRecipients
-  };
+  // Detect Ghanaian networks for intelligent instant routing
+  const hasNonMtnRecipients = cleanedRecipients.some(r => {
+    const net = detectGhanaNetwork(r);
+    return net.network === 'Telecel' || net.network === 'AirtelTigo';
+  });
+
+  // Prefer the direct carrier route (V1) for sub-second, instant delivery across Telecel, AirtelTigo, and MTN
+  const useDirectRoutePrimary = 
+    configuredEndpoint.includes('/sms/api') || 
+    !configuredEndpoint.includes('/api/v2/') || 
+    hasNonMtnRecipients;
 
   const arkeselRequestStartTime = Date.now();
+  let arkeselResponseTime = Date.now();
+  let statusCode = 200;
+  let status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error' = 'Failed';
+  let isSuccess = false;
+  let data: any = null;
+  let responseText = '';
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-    // Direct HTTP request to Arkesel with keep-alive
-    let response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': config.apiKey.trim(),
-        'Connection': 'keep-alive'
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    let arkeselResponseTime = Date.now();
-    let responseText = await response.text();
-    let data: any = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch {
-      data = { raw: responseText };
-    }
-
-    let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-
-    // Multi-network recovery: If custom business name sender ID failed or was rejected by telecom network rules,
-    // immediately retry once with the registered approved Sender ID to guarantee delivery to all networks (Telecel, AirtelTigo, MTN)!
-    const isPrimaryFailed = 
-      !response.ok || 
-      data?.status === 'error' || 
-      data?.status === 'failed' || 
-      (data?.code && data?.code !== 1000 && data?.code !== '1000' && !lowerMsg.includes('successfully submitted'));
-
-    const isSenderOrNetworkIssue = 
-      lowerMsg.includes('sender') || 
-      lowerMsg.includes('unauthorized') || 
-      lowerMsg.includes('not approved') || 
-      lowerMsg.includes('whitelist') || 
-      lowerMsg.includes('not permitted') ||
-      lowerMsg.includes('route') ||
-      lowerMsg.includes('network') ||
-      lowerMsg.includes('rejected') ||
-      response.status === 400 || 
-      response.status === 422;
-
-    if (isPrimaryFailed && effectiveSender !== registeredApprovedSender && isSenderOrNetworkIssue) {
-      console.warn(`[Arkesel Multi-Network Fallback] Primary sender "${effectiveSender}" was rejected by telecom operator. Retrying immediately with registered approved sender "${registeredApprovedSender}" across all networks.`);
-      effectiveSender = registeredApprovedSender;
-      payload.sender = registeredApprovedSender;
-
-      const retryController = new AbortController();
-      const retryTimeoutId = setTimeout(() => retryController.abort(), 10000);
-      try {
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'api-key': config.apiKey.trim(),
-            'Connection': 'keep-alive'
-          },
-          body: JSON.stringify(payload),
-          signal: retryController.signal
-        });
-        clearTimeout(retryTimeoutId);
-        arkeselResponseTime = Date.now();
-        responseText = await response.text();
+    if (useDirectRoutePrimary) {
+      // 1. FAST DIRECT CARRIER ROUTE (Instant SMPP pipe to MTN, Telecel, AirtelTigo)
+      const dispatchV1 = async (senderToUse: string) => {
+        const v1Url = `https://sms.arkesel.com/sms/api?action=send-sms&api_key=${encodeURIComponent(config.apiKey.trim())}&to=${encodeURIComponent(cleanedRecipients.join(','))}&from=${encodeURIComponent(senderToUse)}&sms=${encodeURIComponent(trimmedMessage)}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
         try {
-          data = JSON.parse(responseText);
-        } catch {
-          data = { raw: responseText };
+          const res = await fetch(v1Url, {
+            method: 'GET',
+            headers: { 'Connection': 'keep-alive' },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          const text = await res.text();
+          let parsed: any = null;
+          try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
+          return { res, text, parsed };
+        } catch (err) {
+          clearTimeout(timeoutId);
+          throw err;
         }
-        lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-      } catch (retryErr) {
-        clearTimeout(retryTimeoutId);
-        console.warn('[Arkesel Multi-Network Fallback Retry Exception]:', retryErr);
+      };
+
+      try {
+        let v1Result = await dispatchV1(effectiveSender);
+        arkeselResponseTime = Date.now();
+        statusCode = v1Result.res.status;
+        responseText = v1Result.text;
+        data = v1Result.parsed;
+
+        let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+        
+        // If custom sender failed or was rejected, retry immediately with the registered approved Sender ID
+        const v1Failed = !v1Result.res.ok || (data?.code && data?.code !== 'ok' && data?.code !== 1000 && !lowerMsg.includes('successfully sent'));
+        if (v1Failed && effectiveSender !== registeredApprovedSender) {
+          console.warn(`[Arkesel Direct Carrier Retry] Sender "${effectiveSender}" not accepted. Retrying with approved sender "${registeredApprovedSender}"`);
+          effectiveSender = registeredApprovedSender;
+          v1Result = await dispatchV1(registeredApprovedSender);
+          arkeselResponseTime = Date.now();
+          statusCode = v1Result.res.status;
+          responseText = v1Result.text;
+          data = v1Result.parsed;
+          lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+        }
+
+        if (v1Result.res.ok && (data?.code === 'ok' || lowerMsg.includes('successfully sent') || data?.code === 1000)) {
+          isSuccess = true;
+          status = 'Successfully sent';
+        }
+      } catch (v1Err) {
+        console.warn('[Arkesel Direct Route Failed, falling back to V2 REST API]:', v1Err);
       }
     }
 
-    const statusCode = response.status;
-    let status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error' = 'Failed';
-    let isSuccess = false;
+    // 2. FALLBACK TO V2 REST API IF DIRECT ROUTE DID NOT SUCCEED OR V2 WAS SPECIFICALLY REQUESTED
+    if (!isSuccess) {
+      const v2Endpoint = 'https://sms.arkesel.com/api/v2/sms/send';
+      const payload: any = {
+        sender: effectiveSender,
+        message: trimmedMessage,
+        recipients: cleanedRecipients
+      };
 
-    // Check Arkesel official response specifications
-    // Arkesel v2 returns { "status": "success", "data": [...], "message": "Successfully Submitted" }
-    // Or code 1000 / "1000"
-    if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('successfully submitted') || lowerMsg.includes('success'))) {
-      isSuccess = true;
-      status = 'Successfully sent';
-      // Background non-blocking update of counters and test state
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch(v2Endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': config.apiKey.trim(),
+          'Connection': 'keep-alive'
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      arkeselResponseTime = Date.now();
+      statusCode = response.status;
+      responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        data = { raw: responseText };
+      }
+
+      const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+      if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('success') || lowerMsg.includes('submitted'))) {
+        isSuccess = true;
+        status = 'Successfully sent';
+      }
+    }
+
+    const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+
+    if (isSuccess) {
       inMemorySmsConfig.totalSentCount = (inMemorySmsConfig.totalSentCount || 0) + cleanedRecipients.length;
       inMemorySmsConfig.lastTestedAt = new Date().toISOString();
       inMemorySmsConfig.lastTestStatus = 'Active & Connected';
-      inMemorySmsConfig.lastTestMessage = data?.message || 'Successfully Submitted';
+      inMemorySmsConfig.lastTestMessage = data?.message || 'Successfully Sent (Instant Carrier Route)';
       setImmediate(() => writeSmsConfig(inMemorySmsConfig));
-    } else {
+    }
+
+    if (!isSuccess) {
       if (statusCode === 401 || statusCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication') || lowerMsg.includes('invalid key')) {
         status = 'Invalid API key';
       } else if (lowerMsg.includes('balance') || lowerMsg.includes('credit') || lowerMsg.includes('insufficient') || lowerMsg.includes('fund') || lowerMsg.includes('units')) {

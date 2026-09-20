@@ -318,27 +318,22 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
     setCompletedSale(saleRecord);
     setSmsPhoneInput(selectedCustomer?.phone || '');
 
-    // Automatically send SMS receipt via Arkesel upon checkout
+    // Automatically send SMS receipt via Arkesel upon checkout in the background (silent, non-blocking)
     const targetPhone = selectedCustomer?.phone || '';
     if (targetPhone && business.smsEnabled !== false) {
-      setIsSendingSms(true);
       const itemsSummary = saleRecord.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
       const msg = `${business.name}: Dispensation #${saleRecord.id.slice(-6)} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(saleRecord.total, business.currency || 'GHC')}. Thank you!`;
-      db.sendSms({
-        recipient: targetPhone,
-        message: msg,
-        businessId: business.id,
-        businessName: business.name,
-        type: 'receipt'
-      }).then(res => {
-        setIsSendingSms(false);
-        if (res.success) {
-          showSuccess('SMS Sent', `Receipt SMS automatically delivered to ${targetPhone}.`);
-        }
-      }).catch(err => {
-        setIsSendingSms(false);
-        console.warn('Auto SMS error in PharmacyPOS:', err);
-      });
+      setTimeout(() => {
+        db.sendSms({
+          recipient: targetPhone,
+          message: msg,
+          businessId: business.id,
+          businessName: business.name,
+          type: 'receipt'
+        }).catch(err => {
+          console.warn('Auto SMS error in PharmacyPOS:', err);
+        });
+      }, 0);
     }
 
     setIsPaymentModalOpen(false);

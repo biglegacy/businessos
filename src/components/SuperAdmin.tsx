@@ -78,8 +78,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     totalSentCount: number;
   }>({
     provider: 'Arkesel',
-    senderId: 'BusinessOS',
-    apiEndpoint: 'https://sms.arkesel.com/api/v2/sms/send',
+    senderId: 'Legacy Inc',
+    apiEndpoint: 'https://sms.arkesel.com/sms/api?action=send-sms',
     isEnabled: true,
     hasApiKey: false,
     maskedApiKey: '',
@@ -90,8 +90,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   });
 
   const [smsApiKeyInput, setSmsApiKeyInput] = useState('');
-  const [smsSenderIdInput, setSmsSenderIdInput] = useState('BusinessOS');
-  const [smsEndpointInput, setSmsEndpointInput] = useState('https://sms.arkesel.com/api/v2/sms/send');
+  const [smsSenderIdInput, setSmsSenderIdInput] = useState('Legacy Inc');
+  const [smsEndpointInput, setSmsEndpointInput] = useState('https://sms.arkesel.com/sms/api?action=send-sms');
   const [smsIsEnabled, setSmsIsEnabled] = useState(true);
   const [showSmsApiKey, setShowSmsApiKey] = useState(false);
   const [smsSaving, setSmsSaving] = useState(false);
@@ -463,8 +463,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       const data = await db.getSmsSettings();
       if (data) {
         setSmsConfig(data);
-        setSmsSenderIdInput(data.senderId || 'BusinessOS');
-        setSmsEndpointInput(data.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send');
+        setSmsSenderIdInput(data.senderId || 'Legacy Inc');
+        setSmsEndpointInput(data.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms');
         setSmsIsEnabled(data.isEnabled !== undefined ? data.isEnabled : true);
         if (data.maskedApiKey) {
           setSmsApiKeyInput(data.maskedApiKey);
@@ -2478,7 +2478,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sender ID</p>
-                    <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{smsConfig.senderId || 'BusinessOS'}</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{smsConfig.senderId || 'Legacy Inc'}</p>
                     <p className="text-[10px] text-slate-500">Max 11 Alphanumeric</p>
                   </div>
 
@@ -2613,11 +2613,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         id="input-arkesel-endpoint"
                         value={smsEndpointInput}
                         onChange={(e) => setSmsEndpointInput(e.target.value)}
-                        placeholder="https://sms.arkesel.com/api/v2/sms/send"
+                        placeholder="https://sms.arkesel.com/sms/api?action=send-sms"
                         className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-slate-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 outline-none transition"
                       />
                       <p className="text-[11px] text-slate-400 mt-1">
-                        Standard Arkesel v2 REST API endpoint.
+                        High-speed Arkesel direct carrier gateway for instant delivery across MTN, Telecel, and AirtelTigo.
                       </p>
                     </div>
 
@@ -3048,7 +3048,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                             {log.recipient}
                           </td>
                           <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
-                            {log.senderId || 'BusinessOS'}
+                            {log.senderId || 'Legacy Inc'}
                           </td>
                           <td className="py-3 px-4 max-w-xs truncate text-slate-600" title={log.message}>
                             {log.message}
