@@ -14,7 +14,8 @@ import {
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
   MessageSquare, MessageSquareOff, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
   Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch,
-  LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown, CheckSquare, Square
+  LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown, CheckSquare, Square,
+  Radio
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -106,8 +107,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     status: string;
     message: string;
     success: boolean;
+    smsId?: string;
     recipient?: string;
     displayMessage?: string;
+    deliveryStatus?: string;
+    deliveredAt?: string;
     timings?: SmsTimingDetails;
   } | null>(null);
 
@@ -122,6 +126,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   // SMS Delivery Logs State
   const [smsLogs, setSmsLogs] = useState<any[]>([]);
   const [isLoadingSmsLogs, setIsLoadingSmsLogs] = useState(false);
+
+  // Multi-Network Diagnostic & Delivery Status Polling States
+  const [mtnDiagnosticNumber, setMtnDiagnosticNumber] = useState('');
+  const [telecelDiagnosticNumber, setTelecelDiagnosticNumber] = useState('');
+  const [airtelTigoDiagnosticNumber, setAirtelTigoDiagnosticNumber] = useState('');
+  const [isRunningDiagnostic, setIsRunningDiagnostic] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<any | null>(null);
+  const [checkingSmsId, setCheckingSmsId] = useState<string | null>(null);
+  const [isSyncingStatuses, setIsSyncingStatuses] = useState(false);
+  const [statusSyncMessage, setStatusSyncMessage] = useState<string | null>(null);
 
   // =========================================================================
   // SUPER ADMIN BUSINESS PRICING MANAGEMENT STATE
@@ -570,11 +584,54 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         targetBus?.name
       );
       setTestSmsResult(res);
-      // Refresh configuration and logs
-      const updatedConfig = await db.getSmsSettings();
-      if (updatedConfig) setSmsConfig(updatedConfig);
-      const updatedLogs = await db.getSmsLogs();
-      if (updatedLogs) setSmsLogs(updatedLogs);
+
+      // Refresh configuration and logs immediately without artificial delays
+      db.getSmsSettings().then(cfg => { if (cfg) setSmsConfig(cfg); });
+      db.getSmsLogs().then(logs => { if (logs) setSmsLogs(logs); });
+
+      // Automatically track delivery status from Arkesel until terminal status is reached (Requirement 7)
+      if (res.success && res.smsId) {
+        let attempts = 0;
+        const targetId = res.smsId;
+        const pollInterval = setInterval(async () => {
+          attempts++;
+          try {
+            const statusRes = await db.checkSmsDeliveryStatus(targetId);
+            if (statusRes && statusRes.success && statusRes.status) {
+              const upper = statusRes.status.toUpperCase();
+              const isTerminal = ['DELIVERED', 'NOT_DELIVERED', 'EXPIRED', 'PROHIBITED'].includes(upper);
+
+              if (isTerminal || attempts >= 8) {
+                clearInterval(pollInterval);
+                let newMsg = 'SMS submitted successfully to Arkesel. Delivery confirmation pending.';
+                if (upper === 'DELIVERED') {
+                  newMsg = '✓ SMS delivered successfully';
+                } else if (upper === 'NOT_DELIVERED') {
+                  newMsg = '✕ SMS not delivered';
+                } else if (upper === 'EXPIRED') {
+                  newMsg = '⚠ SMS expired before delivery';
+                } else if (upper === 'PROHIBITED') {
+                  newMsg = '✕ SMS delivery prohibited';
+                }
+
+                setTestSmsResult(prev => prev ? {
+                  ...prev,
+                  status: upper,
+                  deliveryStatus: statusRes.deliveryStatus || upper.toLowerCase(),
+                  displayMessage: newMsg,
+                  deliveredAt: upper === 'DELIVERED' ? (statusRes.data?.sent_at_time || new Date().toLocaleTimeString()) : prev.deliveredAt
+                } : null);
+
+                const refreshedLogs = await db.getSmsLogs();
+                if (refreshedLogs) setSmsLogs(refreshedLogs);
+              }
+            }
+          } catch (e) {}
+          if (attempts >= 8) {
+            clearInterval(pollInterval);
+          }
+        }, 2200);
+      }
     } catch (err: any) {
       setTestSmsResult({
         success: false,
@@ -583,6 +640,117 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       });
     } finally {
       setIsSendingTestSms(false);
+    }
+  };
+
+  const handleCheckSmsStatus = async (smsId: string) => {
+    if (!smsId) return;
+    setCheckingSmsId(smsId);
+    try {
+      const res = await db.checkSmsDeliveryStatus(smsId);
+      if (res && res.success) {
+        setSmsLogs(prevLogs => prevLogs.map(l => {
+          if (l.smsId === smsId) {
+            return {
+              ...l,
+              status: res.status || l.status,
+              deliveryStatus: res.deliveryStatus || l.deliveryStatus,
+              deliveredAt: res.deliveryStatus === 'delivered' ? (l.deliveredAt || new Date().toISOString()) : l.deliveredAt,
+              response: res.data?.status || res.data?.message || l.response
+            };
+          }
+          return l;
+        }));
+      }
+    } catch (err) {
+      console.warn('Error checking SMS status:', err);
+    } finally {
+      setCheckingSmsId(null);
+    }
+  };
+
+  const handleSyncSmsStatuses = async () => {
+    setIsSyncingStatuses(true);
+    setStatusSyncMessage(null);
+    try {
+      const res = await db.refreshPendingSmsStatuses();
+      setStatusSyncMessage(res.message || 'Delivery statuses synchronized with Arkesel.');
+      const updatedLogs = await db.getSmsLogs();
+      if (updatedLogs) setSmsLogs(updatedLogs);
+    } catch (err: any) {
+      setStatusSyncMessage('Failed to sync statuses: ' + (err.message || 'Network error'));
+    } finally {
+      setIsSyncingStatuses(false);
+      setTimeout(() => setStatusSyncMessage(null), 5000);
+    }
+  };
+
+  const handleRunMultiNetworkDiagnostic = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsRunningDiagnostic(true);
+    setDiagnosticResult(null);
+    try {
+      const res = await db.runSmsDiagnostic({
+        mtnNumber: mtnDiagnosticNumber.trim() || undefined,
+        telecelNumber: telecelDiagnosticNumber.trim() || undefined,
+        airtelTigoNumber: airtelTigoDiagnosticNumber.trim() || undefined,
+        senderId: smsConfig.senderId || 'Legacy Inc'
+      });
+      setDiagnosticResult(res);
+      const updatedLogs = await db.getSmsLogs();
+      if (updatedLogs) setSmsLogs(updatedLogs);
+
+      // Auto-poll terminal delivery status for diagnostic SMS IDs
+      if (res && Array.isArray(res.results)) {
+        const pendingSmsIds = res.results.filter((r: any) => r.accepted && r.smsId).map((r: any) => r.smsId);
+        if (pendingSmsIds.length > 0) {
+          let diagAttempts = 0;
+          const diagPoll = setInterval(async () => {
+            diagAttempts++;
+            let allFinished = true;
+            for (const id of pendingSmsIds) {
+              try {
+                const sRes = await db.checkSmsDeliveryStatus(id);
+                if (sRes && sRes.success && sRes.status) {
+                  const upper = sRes.status.toUpperCase();
+                  setDiagnosticResult((prev: any) => {
+                    if (!prev || !prev.results) return prev;
+                    return {
+                      ...prev,
+                      results: prev.results.map((item: any) => {
+                        if (item.smsId === id) {
+                          return {
+                            ...item,
+                            currentDeliveryStatus: upper,
+                            deliveryStatus: sRes.deliveryStatus || upper.toLowerCase(),
+                            deliveredAt: upper === 'DELIVERED' ? (sRes.data?.sent_at_time || new Date().toLocaleTimeString()) : item.deliveredAt
+                          };
+                        }
+                        return item;
+                      })
+                    };
+                  });
+                  if (!['DELIVERED', 'NOT_DELIVERED', 'EXPIRED', 'PROHIBITED'].includes(upper)) {
+                    allFinished = false;
+                  }
+                }
+              } catch (e) {}
+            }
+            if (allFinished || diagAttempts >= 8) {
+              clearInterval(diagPoll);
+              const refreshedLogs = await db.getSmsLogs();
+              if (refreshedLogs) setSmsLogs(refreshedLogs);
+            }
+          }, 2200);
+        }
+      }
+    } catch (err: any) {
+      setDiagnosticResult({
+        success: false,
+        error: err.message || 'Failed to execute diagnostic'
+      });
+    } finally {
+      setIsRunningDiagnostic(false);
     }
   };
 
@@ -654,12 +822,16 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
   // Fetch current data from reactive Firestore state
   const businesses = firestoreBusinesses;
-  const users = db.getUsers().filter(u => u.role !== 'admin'); // Hide admin from employee list
+  const validBusinessIds = new Set(businesses.map(b => b.id));
+  const users = db.getUsers().filter(u => 
+    u && u.role !== 'admin' && 
+    ((u.businessId && validBusinessIds.has(u.businessId)) || (u.schoolId && validBusinessIds.has(u.schoolId)))
+  );
   const logs = db.getAllLogs().sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Platform Metrics
   const totalBusinesses = businesses.length;
-  const totalUsers = users.length + 1; // plus super admin
+  const totalUsers = users.length;
   const activeBusinesses = businesses.filter(b => b.status === 'active').length;
 
   // Retrieve pricing plans for plan resolution
@@ -2842,66 +3014,303 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     {/* Test Result Display */}
                     {testSmsResult && !isSendingTestSms && (
                       <div className={`p-4 rounded-xl border text-xs space-y-2 mt-4 transition-all ${
-                        testSmsResult.success 
-                          ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950' 
-                          : 'bg-rose-50/80 border-rose-200 text-rose-950'
+                        testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered'
+                          ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                          : testSmsResult.status === 'NOT_DELIVERED' || testSmsResult.status === 'PROHIBITED'
+                            ? 'bg-rose-50/80 border-rose-200 text-rose-950'
+                            : testSmsResult.status === 'EXPIRED'
+                              ? 'bg-amber-50/80 border-amber-200 text-amber-950'
+                              : testSmsResult.success
+                                ? 'bg-amber-50/80 border-amber-200 text-amber-950'
+                                : 'bg-rose-50/80 border-rose-200 text-rose-950'
                       }`}>
                         <div className="flex items-center justify-between">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider ${
-                            testSmsResult.success 
-                              ? 'bg-emerald-200 text-emerald-900' 
-                              : 'bg-rose-200 text-rose-900'
+                            testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered'
+                              ? 'bg-emerald-200 text-emerald-900 border border-emerald-300'
+                              : testSmsResult.status === 'NOT_DELIVERED' || testSmsResult.status === 'PROHIBITED'
+                                ? 'bg-rose-200 text-rose-900 border border-rose-300'
+                                : testSmsResult.status === 'EXPIRED'
+                                  ? 'bg-amber-200 text-amber-900 border border-amber-300'
+                                  : testSmsResult.success
+                                    ? 'bg-amber-200 text-amber-900 border border-amber-300'
+                                    : 'bg-rose-200 text-rose-900 border border-rose-300'
                           }`}>
-                            {testSmsResult.status}
+                            {testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered'
+                              ? 'DELIVERED'
+                              : testSmsResult.status === 'NOT_DELIVERED'
+                                ? 'NOT DELIVERED'
+                                : testSmsResult.status === 'EXPIRED'
+                                  ? 'EXPIRED'
+                                  : testSmsResult.status === 'PROHIBITED'
+                                    ? 'PROHIBITED'
+                                    : testSmsResult.success
+                                      ? 'SUBMITTED'
+                                      : 'FAILED'}
                           </span>
                           <span className="text-[10px] text-slate-500 font-mono">
                             {new Date().toLocaleTimeString()}
                           </span>
                         </div>
                         <p className="font-bold text-xs leading-relaxed flex items-center gap-1.5">
-                          {testSmsResult.success ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          {testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered' ? (
+                            <>
+                              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                              <span className="text-emerald-900">✓ SMS delivered successfully</span>
+                            </>
+                          ) : testSmsResult.status === 'NOT_DELIVERED' ? (
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                              <span className="text-rose-900">✕ SMS not delivered</span>
+                            </>
+                          ) : testSmsResult.status === 'EXPIRED' ? (
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                              <span className="text-amber-900">⚠ SMS expired before delivery</span>
+                            </>
+                          ) : testSmsResult.status === 'PROHIBITED' ? (
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                              <span className="text-rose-900">✕ SMS delivery prohibited</span>
+                            </>
+                          ) : testSmsResult.success ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 text-amber-600 animate-spin shrink-0" />
+                              <span className="text-amber-900">SMS submitted successfully to Arkesel. Delivery confirmation pending.</span>
+                            </>
                           ) : (
-                            <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                              <span className="text-rose-900">✕ Test SMS failed. Please check your Arkesel configuration.</span>
+                            </>
                           )}
-                          <span>
-                            {testSmsResult.success 
-                              ? '✓ Test SMS sent successfully.' 
-                              : '✕ Test SMS failed. Please check your Arkesel configuration.'}
-                          </span>
                         </p>
-                        {testSmsResult.message && testSmsResult.message !== 'Test SMS sent successfully' && (
-                          <p className="text-[11px] text-slate-600">
-                            {testSmsResult.message}
-                          </p>
-                        )}
                         {testSmsResult.recipient && (
                           <p className="text-[11px] text-slate-600 font-mono">
                             Target: {testSmsResult.recipient}
                           </p>
                         )}
+                        {testSmsResult.smsId && (
+                          <p className="text-[10px] text-slate-500 font-mono truncate">
+                            Arkesel ID: {testSmsResult.smsId}
+                          </p>
+                        )}
                         {testSmsResult.timings && (
-                          <div className="pt-2 border-t border-emerald-200/60 mt-2 space-y-1.5">
+                          <div className="pt-2 border-t border-slate-200/60 mt-2 space-y-1.5">
                             <div className="flex items-center justify-between text-[11px] font-bold">
-                              <span className="text-emerald-800 flex items-center gap-1">
-                                <Zap className="h-3.5 w-3.5 text-emerald-600" /> Total Pipeline Speed:
+                              <span className="text-slate-700 flex items-center gap-1">
+                                <Zap className="h-3.5 w-3.5 text-amber-600" /> Submission Speed:
                               </span>
-                              <span className="bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full font-mono">
-                                {testSmsResult.timings.totalPipelineMs} ms
+                              <span className="bg-slate-200 text-slate-900 px-2 py-0.5 rounded-full font-mono">
+                                {(testSmsResult.timings.totalSubmissionMs / 1000).toFixed(1)} seconds
                               </span>
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-600 pt-1">
-                              <div className="bg-white/60 p-1.5 rounded border border-emerald-100">
+                              <div className="bg-white/60 p-1.5 rounded border border-slate-200">
                                 <span className="text-slate-400 block">Arkesel Gateway:</span>
                                 <span className="font-mono font-bold text-slate-800">{testSmsResult.timings.arkeselLatencyMs} ms</span>
                               </div>
-                              <div className="bg-white/60 p-1.5 rounded border border-emerald-100">
-                                <span className="text-slate-400 block">Network Pipeline:</span>
-                                <span className="font-mono font-bold text-emerald-700">Instant (&lt; 0.5s)</span>
+                              <div className="bg-white/60 p-1.5 rounded border border-slate-200">
+                                <span className="text-slate-400 block">Delivery Status:</span>
+                                <span className={`font-mono font-bold ${
+                                  testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered'
+                                    ? 'text-emerald-700'
+                                    : testSmsResult.status === 'NOT_DELIVERED' || testSmsResult.status === 'PROHIBITED'
+                                      ? 'text-rose-700'
+                                      : 'text-amber-700'
+                                }`}>
+                                  {testSmsResult.status === 'DELIVERED' || testSmsResult.deliveryStatus === 'delivered'
+                                    ? 'Delivered'
+                                    : testSmsResult.status === 'NOT_DELIVERED'
+                                      ? 'Not Delivered'
+                                      : testSmsResult.status === 'EXPIRED'
+                                        ? 'Expired'
+                                        : testSmsResult.status === 'PROHIBITED'
+                                          ? 'Prohibited'
+                                          : 'Pending'}
+                                </span>
                               </div>
                             </div>
+                            {testSmsResult.deliveredAt && (
+                              <div className="text-[10px] text-emerald-800 font-semibold pt-0.5">
+                                Delivery Confirmed: {testSmsResult.deliveredAt}
+                              </div>
+                            )}
                           </div>
                         )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Multi-Network Universal Diagnostic Tool (MTN, Telecel, AirtelTigo) */}
+                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                    <div className="pb-3 border-b border-slate-100 flex items-center justify-between">
+                      <div>
+                        <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
+                          <Radio className="h-4 w-4 text-emerald-700" /> Multi-Carrier Diagnostic Test
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Simultaneously test universal delivery across all Ghanaian telecom networks (MTN, Telecel, AirtelTigo).
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold rounded-lg uppercase">
+                        Universal Delivery
+                      </span>
+                    </div>
+
+                    <form onSubmit={handleRunMultiNetworkDiagnostic} className="space-y-3 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-amber-800 uppercase mb-1 flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-amber-500" /> MTN Phone
+                          </label>
+                          <input
+                            type="tel"
+                            value={mtnDiagnosticNumber}
+                            onChange={(e) => setMtnDiagnosticNumber(e.target.value)}
+                            placeholder="0244123456"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-mono text-xs focus:ring-2 focus:ring-amber-500 outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-rose-800 uppercase mb-1 flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-rose-500" /> Telecel Phone
+                          </label>
+                          <input
+                            type="tel"
+                            value={telecelDiagnosticNumber}
+                            onChange={(e) => setTelecelDiagnosticNumber(e.target.value)}
+                            placeholder="0208002240"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-mono text-xs focus:ring-2 focus:ring-rose-500 outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-blue-800 uppercase mb-1 flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-blue-500" /> AirtelTigo Phone
+                          </label>
+                          <input
+                            type="tel"
+                            value={airtelTigoDiagnosticNumber}
+                            onChange={(e) => setAirtelTigoDiagnosticNumber(e.target.value)}
+                            placeholder="0277653421"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 font-mono text-xs focus:ring-2 focus:ring-blue-500 outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isRunningDiagnostic}
+                        className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-xl font-bold text-xs shadow transition flex items-center justify-center gap-2 cursor-pointer min-h-[42px]"
+                      >
+                        {isRunningDiagnostic ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+                            <span>Running multi-network carrier diagnostics...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="h-4 w-4 text-emerald-400" />
+                            <span>Run Multi-Carrier Diagnostic (MTN, Telecel, AirtelTigo)</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
+
+                    {diagnosticResult && (
+                      <div className="mt-4 pt-3 border-t border-slate-100 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-700">Diagnostic Results:</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                            diagnosticResult.allAccepted 
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                              : 'bg-amber-100 text-amber-900 border border-amber-300'
+                          }`}>
+                            {diagnosticResult.allAccepted ? '✓ All Carriers Accepted' : 'Partial / Errors Detected'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {diagnosticResult.results?.map((res: any, idx: number) => {
+                            const netBg = res.network === 'MTN' 
+                              ? 'bg-amber-50 border-amber-200 text-amber-900' 
+                              : res.network === 'Telecel' 
+                                ? 'bg-rose-50 border-rose-200 text-rose-900' 
+                                : 'bg-blue-50 border-blue-200 text-blue-900';
+                            
+                            const badgeBg = res.network === 'MTN' 
+                              ? 'bg-amber-200 text-amber-900' 
+                              : res.network === 'Telecel' 
+                                ? 'bg-rose-200 text-rose-900' 
+                                : 'bg-blue-200 text-blue-900';
+
+                            return (
+                              <div key={idx} className={`p-3 rounded-xl border ${netBg} space-y-1.5 text-xs`}>
+                                <div className="flex items-center justify-between">
+                                  <span className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${badgeBg}`}>
+                                    {res.network}
+                                  </span>
+                                  <span className={`text-[10px] font-bold ${res.accepted ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                    {res.accepted ? 'Accepted' : 'Failed'}
+                                  </span>
+                                </div>
+                                <p className="font-mono text-[11px] font-bold truncate">
+                                  {res.normalizedNumber || res.rawNumber}
+                                </p>
+                                <div className="text-[10px] text-slate-600 space-y-0.5 pt-1 border-t border-slate-200/60">
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-400">Carrier:</span>
+                                    <span className="font-semibold">{res.detectedCarrier} ({res.carrierPrefix || '233'})</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-400">Arkesel ID:</span>
+                                    <span className="font-mono font-semibold truncate max-w-[120px]">{res.smsId || 'None'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-slate-400">Status:</span>
+                                    <span className={`font-extrabold uppercase ${
+                                      res.currentDeliveryStatus === 'DELIVERED' || res.deliveryStatus === 'delivered'
+                                        ? 'text-emerald-700'
+                                        : res.currentDeliveryStatus === 'NOT_DELIVERED' || res.currentDeliveryStatus === 'PROHIBITED'
+                                          ? 'text-rose-700'
+                                          : 'text-amber-700'
+                                    }`}>
+                                      {res.currentDeliveryStatus === 'DELIVERED' || res.deliveryStatus === 'delivered'
+                                        ? '✓ DELIVERED'
+                                        : res.currentDeliveryStatus === 'NOT_DELIVERED'
+                                          ? '✕ NOT DELIVERED'
+                                          : res.currentDeliveryStatus === 'EXPIRED'
+                                            ? '⚠ EXPIRED'
+                                            : res.currentDeliveryStatus === 'PROHIBITED'
+                                              ? '✕ PROHIBITED'
+                                              : res.accepted
+                                                ? 'SUBMITTED (Pending)'
+                                                : 'FAILED'}
+                                    </span>
+                                  </div>
+                                  {res.latencyMs && (
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Submission:</span>
+                                      <span className="font-mono font-medium text-slate-700">{(res.latencyMs / 1000).toFixed(1)}s</span>
+                                    </div>
+                                  )}
+                                  {res.deliveredAt && (
+                                    <div className="text-[10px] text-emerald-800 font-semibold pt-0.5">
+                                      Delivered: {res.deliveredAt}
+                                    </div>
+                                  )}
+                                  {res.specificFailureReason && (
+                                    <div className="text-rose-700 text-[10px] pt-1">
+                                      Error: {res.specificFailureReason}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3012,79 +3421,179 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </div>
               </div>
 
-              {/* SMS Delivery Audit Logs */}
+              {/* SMS Delivery Audit Logs with Live Arkesel Status Polling */}
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                   <div>
                     <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider flex items-center gap-2">
                       <FileText className="h-4 w-4 text-emerald-700" /> Recent SMS Delivery Log &amp; Audit Trail
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Live telemetry of messages dispatched through the central Arkesel gateway across all tenants.
+                      Live telemetry across MTN, Telecel, and AirtelTigo with Arkesel delivery status synchronization.
                     </p>
                   </div>
-                  <span className="text-xs font-bold text-slate-500">
-                    {smsLogs.length} Messages Logged
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {statusSyncMessage && (
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                        {statusSyncMessage}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSyncSmsStatuses}
+                      disabled={isSyncingStatuses}
+                      className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer min-h-[36px]"
+                      title="Poll Arkesel for real delivery reports"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingStatuses ? 'animate-spin text-emerald-600' : ''}`} />
+                      {isSyncingStatuses ? 'Syncing...' : 'Sync Delivery Statuses'}
+                    </button>
+                    <span className="text-xs font-bold text-slate-500">
+                      {smsLogs.length} Messages Logged
+                    </span>
+                  </div>
                 </div>
+
+                {/* Scannable Telemetry Summary Badges */}
+                {smsLogs.length > 0 && (() => {
+                  const deliveredCount = smsLogs.filter((l: any) => (l.status || '').toUpperCase() === 'DELIVERED' || l.deliveryStatus === 'delivered').length;
+                  const submittedCount = smsLogs.filter((l: any) => {
+                    const st = (l.status || '').toUpperCase();
+                    return st === 'SUBMITTED' || st === 'QUEUED' || l.deliveryStatus === 'submitted' || l.deliveryStatus === 'queued';
+                  }).length;
+                  const failedCount = smsLogs.filter((l: any) => {
+                    const st = (l.status || '').toUpperCase();
+                    return st === 'FAILED' || st === 'NOT_DELIVERED' || st === 'PROHIBITED' || st === 'EXPIRED' || l.deliveryStatus === 'failed';
+                  }).length;
+                  const latencies = smsLogs.map((l: any) => l.latencyMs || l.timings?.arkeselLatencyMs || l.timings?.totalSubmissionMs).filter((n: any) => typeof n === 'number' && n > 0);
+                  const avgLatency = latencies.length > 0 ? Math.round(latencies.reduce((a: number, b: number) => a + b, 0) / latencies.length) : null;
+
+                  return (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-1">
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Dispatched</span>
+                        <p className="text-base font-extrabold text-slate-800 mt-0.5">{smsLogs.length}</p>
+                      </div>
+                      <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-100">
+                        <span className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">Delivered</span>
+                        <p className="text-base font-extrabold text-emerald-800 mt-0.5">{deliveredCount}</p>
+                      </div>
+                      <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-100">
+                        <span className="text-[10px] uppercase font-bold text-blue-700 tracking-wider">Submitted / In-Flight</span>
+                        <p className="text-base font-extrabold text-blue-800 mt-0.5">{submittedCount}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Failed / Undelivered</span>
+                        <p className={`text-base font-extrabold mt-0.5 ${failedCount > 0 ? 'text-rose-700' : 'text-slate-600'}`}>{failedCount}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
-                        <th className="py-3 px-4">Recipient</th>
+                        <th className="py-3 px-4">Recipient &amp; Network</th>
                         <th className="py-3 px-4">Sender ID</th>
                         <th className="py-3 px-4">Message Content</th>
+                        <th className="py-3 px-4">Arkesel SMS ID</th>
                         <th className="py-3 px-4">Delivery Status</th>
-                        <th className="py-3 px-4">Speed / Latency</th>
+                        <th className="py-3 px-4">Speed</th>
                         <th className="py-3 px-4">Timestamp</th>
-                        <th className="py-3 px-4">Gateway Response</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
-                      {smsLogs.map((log: any) => (
-                        <tr key={log.id} className="hover:bg-slate-50/50 transition">
-                          <td className="py-3 px-4 font-mono font-bold text-slate-800">
-                            {log.recipient}
-                          </td>
-                          <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
-                            {log.senderId || 'Legacy Inc'}
-                          </td>
-                          <td className="py-3 px-4 max-w-xs truncate text-slate-600" title={log.message}>
-                            {log.message}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                              log.status === 'Delivered' 
-                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                : log.status === 'Filtered'
-                                  ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                  : 'bg-rose-50 text-rose-800 border border-rose-200'
-                            }`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${
-                                log.status === 'Delivered' ? 'bg-emerald-500' : 
-                                log.status === 'Filtered' ? 'bg-amber-500' : 'bg-rose-500'
-                              }`} />
-                              {log.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono text-[10px] font-bold">
-                              <Zap className="h-2.5 w-2.5 text-emerald-600" />
-                              {log.latencyMs ? `${log.latencyMs}ms` : 'Instant'}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-[11px] text-slate-500 max-w-xs truncate" title={log.response}>
-                            {log.response || 'OK'}
-                          </td>
-                        </tr>
-                      ))}
+                      {smsLogs.map((log: any) => {
+                        const rawStatus = (log.status || (log.success ? 'SUBMITTED' : 'FAILED')).toUpperCase();
+                        const isDelivered = rawStatus === 'DELIVERED' || log.deliveryStatus === 'delivered';
+                        const isSubmitted = rawStatus === 'SUBMITTED' || rawStatus === 'QUEUED' || log.deliveryStatus === 'submitted' || log.deliveryStatus === 'queued';
+                        const latency = log.latencyMs || log.timings?.arkeselLatencyMs || log.timings?.totalSubmissionMs || 0;
+                        const network = log.network || 'Ghana';
+                        const smsId = log.smsId || null;
+                        const isCheckingThis = checkingSmsId === smsId;
+
+                        const networkPill = network === 'MTN'
+                          ? 'bg-amber-100 text-amber-900 border-amber-300'
+                          : network === 'Telecel'
+                            ? 'bg-rose-100 text-rose-900 border-rose-300'
+                            : network === 'AirtelTigo'
+                              ? 'bg-blue-100 text-blue-900 border-blue-300'
+                              : 'bg-slate-100 text-slate-700 border-slate-200';
+
+                        const statusBadge = isDelivered
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : isSubmitted
+                            ? 'bg-blue-50 text-blue-800 border-blue-200'
+                            : rawStatus === 'EXPIRED'
+                              ? 'bg-purple-50 text-purple-800 border-purple-200'
+                              : rawStatus === 'PROHIBITED'
+                                ? 'bg-red-50 text-red-800 border-red-200'
+                                : 'bg-rose-50 text-rose-800 border-rose-200';
+
+                        return (
+                          <tr key={log.id} className="hover:bg-slate-50/50 transition">
+                            <td className="py-3 px-4 font-mono font-bold text-slate-800">
+                              <div>{log.recipient}</div>
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase border mt-0.5 ${networkPill}`}>
+                                {network}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-[11px] text-slate-700 font-semibold">
+                              {log.senderId || log.sender || 'Legacy Inc'}
+                            </td>
+                            <td className="py-3 px-4 max-w-xs truncate text-slate-600" title={log.message}>
+                              {log.message}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-[10px] text-slate-500">
+                              {smsId ? (
+                                <span className="bg-slate-100 px-2 py-0.5 rounded font-mono truncate block max-w-[110px]" title={smsId}>
+                                  {smsId}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic">None</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${statusBadge}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${
+                                  isDelivered ? 'bg-emerald-500' : isSubmitted ? 'bg-blue-500' : 'bg-rose-500'
+                                }`} />
+                                {rawStatus}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono text-[10px] font-bold">
+                                <Zap className="h-2.5 w-2.5 text-emerald-600" />
+                                {latency ? `${latency}ms` : 'Instant'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
+                              {new Date(log.timestamp || log.sentAt).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {smsId ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCheckSmsStatus(smsId)}
+                                  disabled={isCheckingThis}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ml-auto"
+                                  title="Check real delivery status from Arkesel"
+                                >
+                                  <RefreshCw className={`h-2.5 w-2.5 ${isCheckingThis ? 'animate-spin text-emerald-600' : ''}`} />
+                                  {isCheckingThis ? 'Checking...' : 'Check Status'}
+                                </button>
+                              ) : (
+                                <span className="text-slate-300 text-[10px]">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                       {smsLogs.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="py-8 text-center text-slate-400">
+                          <td colSpan={8} className="py-8 text-center text-slate-400">
                             No SMS messages have been dispatched through the gateway yet.
                           </td>
                         </tr>

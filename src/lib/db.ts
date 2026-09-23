@@ -1286,7 +1286,15 @@ class CloudDatabase {
 
   // --- USER OPERATIONS ---
   public getUsers(): User[] {
-    return this.read<User>('bos_users');
+    const raw = this.read<User>('bos_users');
+    const businesses = this.getBusinesses();
+    const validBusIds = new Set(businesses.map(b => b.id));
+    return raw.filter(u => {
+      if (!u) return false;
+      if (u.role === 'admin') return true;
+      if (!u.businessId && !u.schoolId) return true;
+      return (u.businessId && validBusIds.has(u.businessId)) || (u.schoolId && validBusIds.has(u.schoolId));
+    });
   }
 
   public saveUser(user: User): void {
@@ -3057,7 +3065,7 @@ class CloudDatabase {
       success: false,
       provider: 'Arkesel',
       senderId: 'Legacy Inc',
-      apiEndpoint: 'https://sms.arkesel.com/sms/api?action=send-sms',
+      apiEndpoint: 'https://sms.arkesel.com/api/v2/sms/send',
       isEnabled: true,
       hasApiKey: false,
       maskedApiKey: '',
@@ -3137,7 +3145,11 @@ class CloudDatabase {
     success: boolean;
     status: string;
     message: string;
+    smsId?: string;
     recipient?: string;
+    deliveryStatus?: string;
+    deliveredAt?: string;
+    displayMessage?: string;
     details?: any;
     timings?: SmsTimingDetails;
   }> {
@@ -3274,6 +3286,50 @@ class CloudDatabase {
       console.warn('Error fetching SMS logs:', e);
     }
     return [];
+  }
+
+  public async checkSmsDeliveryStatus(smsId: string): Promise<any> {
+    try {
+      const res = await fetch('/api/admin/sms/check-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ smsId })
+      });
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || 'Failed to check SMS delivery status' };
+    }
+  }
+
+  public async refreshPendingSmsStatuses(): Promise<any> {
+    try {
+      const res = await fetch('/api/admin/sms/refresh-statuses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || 'Failed to refresh SMS statuses' };
+    }
+  }
+
+  public async runSmsDiagnostic(payload: {
+    mtnNumber?: string;
+    telecelNumber?: string;
+    airtelTigoNumber?: string;
+    senderId?: string;
+    customMessage?: string;
+  }): Promise<any> {
+    try {
+      const res = await fetch('/api/admin/sms/diagnostic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || 'Failed to execute multi-network diagnostic' };
+    }
   }
 
   // =========================================================================

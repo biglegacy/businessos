@@ -314,10 +314,6 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
       alert('Product Name is required.');
       return;
     }
-    if (!prodBarcode.trim()) {
-      alert('SKU / Product Code is required.');
-      return;
-    }
     if (prodSelling <= 0 || isNaN(prodSelling)) {
       alert('Selling price must be a valid number greater than 0.');
       return;
@@ -338,7 +334,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
     if (prodBarcode.trim()) {
       const isDuplicate = products.some(p => 
         p.id !== targetId && 
-        p.barcode.toLowerCase() === prodBarcode.trim().toLowerCase() &&
+        p.barcode && p.barcode.toLowerCase() === prodBarcode.trim().toLowerCase() &&
         (!resolvedBranchId || !p.branchId || p.branchId === resolvedBranchId)
       );
       if (isDuplicate) {
@@ -359,7 +355,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
       sellingPrice: prodSelling,
       wholesalePrice: prodWholesale !== '' ? Number(prodWholesale) : undefined,
       stockQuantity: prodStock,
-      barcode: prodBarcode.trim(),
+      barcode: prodBarcode.trim() || undefined,
       brand: prodBrand.trim() || undefined,
       unitOfMeasurement: prodUnit.trim() || undefined,
       supplier: prodSupplier.trim() || undefined,
@@ -601,7 +597,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                       </div>
                       <h4 className="font-bold text-slate-900 text-sm mt-0.5 leading-snug">{p.name}</h4>
                       <div className="flex items-center gap-2 mt-1 font-mono text-[11px] text-slate-500">
-                        <span>SKU: <strong className="text-slate-700">{p.barcode}</strong></span>
+                        <span>SKU: <strong className="text-slate-700">{p.barcode || '—'}</strong></span>
                         <span>&bull;</span>
                         <span>Stock: <strong className={isOut ? 'text-rose-600 font-black' : isLow ? 'text-amber-600 font-black' : 'text-slate-700'}>{p.stockQuantity}</strong></span>
                       </div>
@@ -726,7 +722,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                       </div>
                     </td>
                     <td className="py-4 px-6">
-                      <p className="font-mono text-slate-700 uppercase font-bold">{p.barcode}</p>
+                      <p className="font-mono text-slate-700 uppercase font-bold">{p.barcode || '—'}</p>
                       {p.barcodeOptional && <p className="text-[10px] text-slate-400 font-mono">BC: {p.barcodeOptional}</p>}
                     </td>
                     {canEditCatalog && (
@@ -1030,10 +1026,10 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                   </div>
                 </div>
 
-                {/* SKU & Barcode with Generate / Scan options */}
+                {/* SKU & Barcode with Generate / Scan options (Optional) */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="block text-slate-600 font-bold uppercase text-[10px]">Barcode &amp; SKU Identifier *</label>
+                    <label className="block text-slate-600 font-bold uppercase text-[10px]">Barcode &amp; SKU Identifier (Optional)</label>
                     <button
                       type="button"
                       onClick={handleGenerateBarcode}
@@ -1045,17 +1041,16 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       type="text"
-                      required
                       value={prodBarcode}
                       onChange={(e) => setProdBarcode(e.target.value)}
-                      placeholder="SKU / Barcode *"
+                      placeholder="SKU / Barcode (Optional)"
                       className="block w-full px-3 py-1.5 border border-slate-200 bg-white rounded-lg text-slate-800 font-mono font-bold focus:ring-1 focus:ring-emerald-500 text-xs"
                     />
                     <input
                       type="text"
                       value={prodOptionalBarcode}
                       onChange={(e) => setProdOptionalBarcode(e.target.value)}
-                      placeholder="Optional Alt Barcode"
+                      placeholder="Alt Barcode (Optional)"
                       className="block w-full px-3 py-1.5 border border-slate-200 bg-white rounded-lg text-slate-800 font-mono focus:ring-1 focus:ring-emerald-500 text-xs"
                     />
                   </div>

@@ -1,9 +1,21 @@
 /**
  * Phone Number Utilities for Ghana and International Formats
- * Supports:
- * - Local Ghanaian numbers: 024XXXXXXX, 020XXXXXXX, 050XXXXXXX, 054XXXXXXX, 055XXXXXXX, 059XXXXXXX, 027XXXXXXX, 057XXXXXXX, etc.
+ * Supports all Ghanaian mobile networks:
+ * - MTN: 024, 054, 055, 059, 053, 025
+ * - Telecel (formerly Vodafone): 020, 050
+ * - AirtelTigo: 027, 057, 026, 056
+ * - Glo: 023
+ * - Landlines / Fixed: 030 - 039
  * - International normalized format for Arkesel: 233XXXXXXXXX or +233XXXXXXXXX
  */
+
+export type GhanaCarrier = 'MTN' | 'Telecel' | 'AirtelTigo' | 'Glo' | 'Other';
+
+export interface NetworkDetectionResult {
+  network: GhanaCarrier;
+  isGhana: boolean;
+  prefix: string;
+}
 
 export interface PhoneValidationResult {
   isValid: boolean;
@@ -11,6 +23,82 @@ export interface PhoneValidationResult {
   displayFormatted: string;
   error?: string;
   isGhanaian: boolean;
+  network?: GhanaCarrier;
+}
+
+/**
+ * Robust, universal normalization for Ghanaian phone numbers.
+ * Converts any local or international representation into the standard Arkesel format: 233XXXXXXXXX.
+ * Safely handles:
+ * - Local 10-digit (020..., 024..., 025..., 026..., 027..., 050..., 054..., 055..., 059..., 053..., 056..., 057...)
+ * - Local 9-digit (20..., 24..., 27..., 50..., etc.)
+ * - Accidental redundant zero: +233020XXXXXXX or 233020XXXXXXX -> 23320XXXXXXX
+ * - Accidental duplicate country code: 233233XXXXXXXXX -> 233XXXXXXXXX
+ * - International prefixes: +233..., 00233..., 00...
+ */
+export function normalizeGhanaPhoneNumber(rawPhone: string): string {
+  if (!rawPhone) return '';
+  let cleaned = String(rawPhone).trim().replace(/[\s\-\(\)\.]/g, '');
+
+  if (cleaned.startsWith('+')) {
+    cleaned = cleaned.slice(1);
+  }
+  if (cleaned.startsWith('00233')) {
+    cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith('00')) {
+    cleaned = cleaned.slice(2);
+  }
+
+  // Strip duplicate 233 prefix (e.g. 233233XXXXXXXXX -> 233XXXXXXXXX)
+  while (cleaned.startsWith('233233') && cleaned.length >= 15) {
+    cleaned = '233' + cleaned.slice(6);
+  }
+
+  // Strip accidental redundant 0 after 233 (e.g. 233020123456 -> 23320123456)
+  if (/^2330[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned.slice(4);
+  }
+
+  // Ghana local 10-digit format starting with 0 (e.g. 024XXXXXXX, 020XXXXXXX, 050XXXXXXX, etc.)
+  if (/^0[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned.slice(1);
+  }
+
+  // Ghana local 9-digit format without leading 0 (e.g. 20XXXXXXX, 24XXXXXXX, 27XXXXXXX, 50XXXXXXX, etc.)
+  if (/^[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Detects Ghanaian mobile network from phone number for display badges & diagnostics.
+ * NOTE: This is NEVER used to filter or reject messages; all valid Ghanaian recipients are delivered.
+ */
+export function detectGhanaNetwork(phone: string): NetworkDetectionResult {
+  const norm = normalizeGhanaPhoneNumber(phone);
+  if (norm.startsWith('233') && norm.length === 12) {
+    const prefix2 = norm.substring(3, 5); // 2-digit carrier prefix after 233
+    // MTN: 024, 054, 055, 059, 053, 025
+    if (['24', '54', '55', '59', '53', '25'].includes(prefix2)) {
+      return { network: 'MTN', isGhana: true, prefix: '0' + prefix2 };
+    }
+    // Telecel: 020, 050
+    if (['20', '50'].includes(prefix2)) {
+      return { network: 'Telecel', isGhana: true, prefix: '0' + prefix2 };
+    }
+    // AirtelTigo: 027, 057, 026, 056
+    if (['27', '57', '26', '56'].includes(prefix2)) {
+      return { network: 'AirtelTigo', isGhana: true, prefix: '0' + prefix2 };
+    }
+    // Glo: 023
+    if (prefix2 === '23') {
+      return { network: 'Glo', isGhana: true, prefix: '0' + prefix2 };
+    }
+    return { network: 'Other', isGhana: true, prefix: '0' + prefix2 };
+  }
+  return { network: 'Other', isGhana: false, prefix: '' };
 }
 
 /**
@@ -36,79 +124,38 @@ export function validateAndNormalizeGhanaPhone(rawPhone: string, allowEmpty = fa
     };
   }
 
-  // Strip all whitespace, hyphens, parentheses, and dots
-  let cleaned = rawPhone.trim().replace(/[\s\-\(\)\.]/g, '');
+  const normalized = normalizeGhanaPhoneNumber(rawPhone);
+  const detected = detectGhanaNetwork(normalized);
 
-  let hasPlus = false;
-  if (cleaned.startsWith('+')) {
-    hasPlus = true;
-    cleaned = cleaned.slice(1);
-  }
-
-  // Reject non-numeric
-  if (!/^\d+$/.test(cleaned)) {
-    return {
-      isValid: false,
-      normalized: cleaned,
-      displayFormatted: rawPhone,
-      error: 'Phone number must contain digits only.',
-      isGhanaian: false
-    };
-  }
-
-  // Check 1: 10-digit Ghana local format starting with 0
-  // e.g. 024XXXXXXX, 020XXXXXXX, 050XXXXXXX, 054XXXXXXX, 055XXXXXXX, 059XXXXXXX, 027XXXXXXX, 057XXXXXXX, etc.
-  if (/^0[235]\d{8}$/.test(cleaned)) {
-    const normalized = '233' + cleaned.slice(1);
-    const displayFormatted = `0${cleaned.slice(1, 3)} ${cleaned.slice(3, 6)} ${cleaned.slice(6)}`;
+  // Valid Ghanaian mobile/fixed number normalized to 233XXXXXXXXX (12 digits)
+  if (normalized.startsWith('233') && /^\d{12}$/.test(normalized)) {
+    const local9 = normalized.slice(3);
+    const displayFormatted = `0${local9.slice(0, 2)} ${local9.slice(2, 5)} ${local9.slice(5)}`;
     return {
       isValid: true,
       normalized,
       displayFormatted,
-      isGhanaian: true
+      isGhanaian: true,
+      network: detected.network
     };
   }
 
-  // Check 2: 12-digit Ghana international format starting with 233
-  // e.g. 23324XXXXXXX, 23355XXXXXXX
-  if (/^233[235]\d{8}$/.test(cleaned)) {
-    const displayFormatted = `+233 ${cleaned.slice(3, 5)} ${cleaned.slice(5, 8)} ${cleaned.slice(8)}`;
-    return {
-      isValid: true,
-      normalized: cleaned,
-      displayFormatted,
-      isGhanaian: true
-    };
-  }
-
-  // Check 3: 9-digit Ghana number without leading 0 or country code
-  // e.g. 241234567
-  if (/^[235]\d{8}$/.test(cleaned)) {
-    const normalized = '233' + cleaned;
-    const displayFormatted = `0${cleaned.slice(0, 2)} ${cleaned.slice(2, 5)} ${cleaned.slice(5)}`;
+  // General international format (10 to 15 digits)
+  if (/^\d{10,15}$/.test(normalized)) {
     return {
       isValid: true,
       normalized,
-      displayFormatted,
-      isGhanaian: true
-    };
-  }
-
-  // Check 4: General international format (10 to 15 digits)
-  if (cleaned.length >= 10 && cleaned.length <= 15) {
-    return {
-      isValid: true,
-      normalized: cleaned,
-      displayFormatted: hasPlus ? `+${cleaned}` : cleaned,
-      isGhanaian: cleaned.startsWith('233')
+      displayFormatted: `+${normalized}`,
+      isGhanaian: normalized.startsWith('233'),
+      network: detected.network
     };
   }
 
   return {
     isValid: false,
-    normalized: cleaned,
+    normalized,
     displayFormatted: rawPhone,
-    error: 'Invalid phone format. Please enter a valid Ghanaian number (e.g. 024 XXX XXXX or +233XXXXXXXXX).',
+    error: 'Invalid phone format. Please enter a valid Ghanaian number (e.g. 024 XXX XXXX, 020 XXX XXXX, 027 XXX XXXX).',
     isGhanaian: false
   };
 }

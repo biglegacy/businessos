@@ -247,7 +247,7 @@ export interface Product {
   wholesalePrice?: number;
   price?: number; // fallback alias for sellingPrice
   stockQuantity: number;
-  barcode: string; // SKU or barcode (Required SKU)
+  barcode?: string; // SKU or barcode (Optional)
   lowStockThreshold?: number;
   reorderLevel?: number;
   branchId?: string; // Optional branch assignment
@@ -1347,6 +1347,7 @@ export interface SmsTimingDetails {
   submissionCompletionTime?: number;
   arkeselLatencyMs?: number;
   totalSubmissionMs?: number;
+  totalPipelineMs?: number;
 }
 
 export interface BusinessPopupPrompt {

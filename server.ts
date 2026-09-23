@@ -78,6 +78,8 @@ function readDatabase(): Record<string, any[]> {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
       const data = JSON.parse(content) || {};
       const deletedIds = new Set(data['bos_deleted_business_ids'] || []);
+      const businesses = data['bos_businesses'] || data['businesses'] || [];
+      const activeBusIds = new Set(businesses.map((b: any) => b && b.id).filter(Boolean));
       if (deletedIds.size > 0) {
         Object.keys(data).forEach(key => {
           if (Array.isArray(data[key])) {
@@ -94,6 +96,14 @@ function readDatabase(): Record<string, any[]> {
               });
             }
           }
+        });
+      }
+      if (Array.isArray(data['bos_users'])) {
+        data['bos_users'] = data['bos_users'].filter((u: any) => {
+          if (!u) return false;
+          if (u.role === 'admin') return true;
+          if (!u.businessId && !u.schoolId) return true;
+          return (u.businessId && activeBusIds.has(u.businessId)) || (u.schoolId && activeBusIds.has(u.schoolId));
         });
       }
       return data;
@@ -197,7 +207,7 @@ function readSmsConfig(): ArkeselServerConfig {
   const defaultConfig: ArkeselServerConfig = {
     apiKey: process.env.ARKESEL_API_KEY || '',
     senderId: process.env.ARKESEL_SENDER_ID || 'Legacy Inc',
-    apiEndpoint: process.env.ARKESEL_SMS_ENDPOINT || 'https://sms.arkesel.com/sms/api?action=send-sms',
+    apiEndpoint: process.env.ARKESEL_SMS_ENDPOINT || 'https://sms.arkesel.com/api/v2/sms/send',
     isEnabled: true,
     totalSentCount: 0
   };
@@ -206,12 +216,16 @@ function readSmsConfig(): ArkeselServerConfig {
     if (fs.existsSync(SMS_CONFIG_FILE)) {
       const content = fs.readFileSync(SMS_CONFIG_FILE, 'utf-8');
       const parsed = JSON.parse(content);
+      let endpoint = parsed.apiEndpoint || defaultConfig.apiEndpoint;
+      if (typeof endpoint === 'string' && endpoint.includes('/sms/api')) {
+        endpoint = 'https://sms.arkesel.com/api/v2/sms/send';
+      }
       return {
         ...defaultConfig,
         ...parsed,
         apiKey: parsed.apiKey || defaultConfig.apiKey,
         senderId: parsed.senderId || defaultConfig.senderId,
-        apiEndpoint: parsed.apiEndpoint || defaultConfig.apiEndpoint,
+        apiEndpoint: endpoint,
         isEnabled: parsed.isEnabled !== undefined ? parsed.isEnabled : true
       };
     }
@@ -342,10 +356,14 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
       const docSnap = await fsGetDoc(docRef);
       if (docSnap.exists()) {
         const d = docSnap.data() as any;
+        const rawEndpoint = d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
+        const sanitizedEndpoint = (typeof rawEndpoint === 'string' && rawEndpoint.includes('/sms/api'))
+          ? 'https://sms.arkesel.com/api/v2/sms/send'
+          : rawEndpoint;
         const config: ArkeselServerConfig = {
           apiKey: d.apiKey || inMemorySmsConfig.apiKey || '',
           senderId: d.senderId || inMemorySmsConfig.senderId || 'Legacy Inc',
-          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
+          apiEndpoint: sanitizedEndpoint,
           isEnabled: d.isEnabled !== false,
           lastTestedAt: d.lastTestedAt,
           lastTestStatus: d.lastTestStatus,
@@ -369,10 +387,14 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
       const doc = await firestoreDb.collection('bos_sms_config').doc('global').get();
       if (doc.exists) {
         const d = doc.data() as any;
+        const rawEndpoint = d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
+        const sanitizedEndpoint = (typeof rawEndpoint === 'string' && rawEndpoint.includes('/sms/api'))
+          ? 'https://sms.arkesel.com/api/v2/sms/send'
+          : rawEndpoint;
         const config: ArkeselServerConfig = {
           apiKey: d.apiKey || inMemorySmsConfig.apiKey || '',
           senderId: d.senderId || inMemorySmsConfig.senderId || 'Legacy Inc',
-          apiEndpoint: d.apiEndpoint || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
+          apiEndpoint: sanitizedEndpoint,
           isEnabled: d.isEnabled !== false,
           lastTestedAt: d.lastTestedAt,
           lastTestStatus: d.lastTestStatus,
@@ -399,10 +421,14 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
       if (resp.ok) {
         const d = await resp.json();
         if (d?.fields) {
+          const rawEndpoint = d.fields.apiEndpoint?.stringValue || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/api/v2/sms/send';
+          const sanitizedEndpoint = (typeof rawEndpoint === 'string' && rawEndpoint.includes('/sms/api'))
+            ? 'https://sms.arkesel.com/api/v2/sms/send'
+            : rawEndpoint;
           const config: ArkeselServerConfig = {
             apiKey: d.fields.apiKey?.stringValue || inMemorySmsConfig.apiKey || '',
             senderId: d.fields.senderId?.stringValue || inMemorySmsConfig.senderId || 'Legacy Inc',
-            apiEndpoint: d.fields.apiEndpoint?.stringValue || inMemorySmsConfig.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms',
+            apiEndpoint: sanitizedEndpoint,
             isEnabled: d.fields.isEnabled?.booleanValue !== false,
             lastTestedAt: d.fields.lastTestedAt?.stringValue,
             lastTestStatus: d.fields.lastTestStatus?.stringValue,
@@ -426,31 +452,66 @@ async function syncSmsConfigFromFirestore(): Promise<ArkeselServerConfig> {
 // Initial sync on boot
 syncSmsConfigFromFirestore().catch(() => {});
 
-// Normalize phone numbers across all networks (MTN, Telecel, AirtelTigo, Glo, and International)
+// Universal phone number normalization for all Ghanaian networks (MTN, Telecel, AirtelTigo, Glo, and Landlines)
 function normalizePhoneNumber(phone: string): string {
   if (!phone) return '';
-  let cleaned = String(phone).trim().replace(/[\s\-\(\)\+\.]/g, '');
-  if (cleaned.startsWith('00')) {
-    cleaned = cleaned.substring(2);
+  let cleaned = String(phone).trim().replace(/[\s\-\(\)\.]/g, '');
+  if (cleaned.startsWith('+')) {
+    cleaned = cleaned.slice(1);
+  }
+  if (cleaned.startsWith('00233')) {
+    cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith('00')) {
+    cleaned = cleaned.slice(2);
+  }
+  // Strip duplicate 233 country codes if present (e.g. 233233... -> 233...)
+  while (cleaned.startsWith('233233') && cleaned.length >= 15) {
+    cleaned = '233' + cleaned.slice(6);
   }
   // Strip accidental redundant 0 after Ghana country code 233 (e.g. +233020xxxxxxx or 233020xxxxxxx -> 23320xxxxxxx)
-  if (/^2330\d{9}$/.test(cleaned)) {
-    cleaned = '233' + cleaned.substring(4);
+  if (/^2330[235]\d{8}$/.test(cleaned)) {
+    cleaned = '233' + cleaned.slice(4);
   }
   // Ghana local 10-digit mobile check starting with 0:
-  // MTN: 024, 054, 055, 059, 053
+  // MTN: 024, 054, 055, 059, 053, 025
   // Telecel (Vodafone): 020, 050
   // AirtelTigo: 027, 057, 026, 056
   // Glo: 023
   // Landlines: 030-039
   if (/^0[235]\d{8}$/.test(cleaned)) {
-    cleaned = '233' + cleaned.substring(1);
+    cleaned = '233' + cleaned.slice(1);
   }
   // Ghana local 9-digit without leading 0 (e.g. 20xxxxxxx, 50xxxxxxx, 27xxxxxxx, 57xxxxxxx, 24xxxxxxx, etc.)
   if (/^[235]\d{8}$/.test(cleaned)) {
     cleaned = '233' + cleaned;
   }
   return cleaned;
+}
+
+// Universal carrier detection for all Ghanaian operators without filtering or rejecting valid numbers
+function detectGhanaNetwork(phone: string): { network: 'MTN' | 'Telecel' | 'AirtelTigo' | 'Glo' | 'Other'; isGhana: boolean; prefix: string } {
+  const norm = normalizePhoneNumber(phone);
+  if (norm.startsWith('233') && norm.length === 12) {
+    const prefix = norm.substring(3, 5);
+    // MTN: 024, 054, 055, 059, 053, 025
+    if (['24', '54', '55', '59', '53', '25'].includes(prefix)) {
+      return { network: 'MTN', isGhana: true, prefix: '0' + prefix };
+    }
+    // Telecel: 020, 050
+    if (['20', '50'].includes(prefix)) {
+      return { network: 'Telecel', isGhana: true, prefix: '0' + prefix };
+    }
+    // AirtelTigo: 027, 057, 026, 056
+    if (['27', '57', '26', '56'].includes(prefix)) {
+      return { network: 'AirtelTigo', isGhana: true, prefix: '0' + prefix };
+    }
+    // Glo: 023
+    if (prefix === '23') {
+      return { network: 'Glo', isGhana: true, prefix: '0' + prefix };
+    }
+    return { network: 'Other', isGhana: true, prefix: '0' + prefix };
+  }
+  return { network: 'Other', isGhana: false, prefix: '' };
 }
 
 // Sliding window cache for SMS deduplication and idempotency (prevents double dispatch and rapid retries)
@@ -466,96 +527,231 @@ setInterval(() => {
   }
 }, 60000);
 
-// Helper to log SMS events asynchronously without blocking the client response
+// Accurate SMS activity logger storing recipient, network, SMS ID, and granular delivery statuses
 function logSmsActivityAsync(entry: {
   businessId: string;
   recipients: string[];
+  rawRecipients?: string[];
   message: string;
   sender: string;
-  status: string;
+  senderId?: string;
+  status: string; // 'SUBMITTED' | 'QUEUED' | 'DELIVERED' | 'NOT_DELIVERED' | 'FAILED' | etc.
+  submitStatus?: 'accepted' | 'rejected' | 'failed';
+  deliveryStatus?: 'queued' | 'submitted' | 'delivered' | 'not_delivered' | 'expired' | 'prohibited' | 'failed' | 'unknown';
   success: boolean;
+  smsIds?: { [recipient: string]: string };
+  smsId?: string | null;
   type?: string;
   responseDetails?: any;
   timings?: any;
 }) {
-  setImmediate(() => {
-    try {
-      const dbData = readDatabase();
-      if (!Array.isArray(dbData['bos_notification_logs'])) dbData['bos_notification_logs'] = [];
-      const logRecord = {
-        id: 'sms-log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-        businessId: entry.businessId,
-        recipient: entry.recipients.join(', '),
+  try {
+    const dbData = readDatabase();
+    if (!Array.isArray(dbData['bos_notification_logs'])) dbData['bos_notification_logs'] = [];
+    
+    const latency = entry.timings?.arkeselLatencyMs || entry.timings?.totalPipelineMs || entry.timings?.totalSubmissionMs || 0;
+    const nowIso = new Date().toISOString();
+    const effectiveSender = entry.senderId || entry.sender || 'Legacy Inc';
+
+    let respSummary = 'OK';
+    if (typeof entry.responseDetails === 'string') {
+      respSummary = entry.responseDetails;
+    } else if (entry.responseDetails && typeof entry.responseDetails === 'object') {
+      respSummary = entry.responseDetails.message || entry.responseDetails.status || (entry.success ? 'Submitted' : 'Failed');
+    }
+
+    const rawResponseStr = entry.responseDetails ? JSON.stringify(entry.responseDetails).slice(0, 1000) : '';
+
+    // Create a database log entry for each recipient
+    const recipientList = entry.recipients.length > 0 ? entry.recipients : ['unknown'];
+    recipientList.forEach((normalizedPhone, idx) => {
+      const rawPhone = entry.rawRecipients && entry.rawRecipients[idx] ? entry.rawRecipients[idx] : normalizedPhone;
+      const detected = detectGhanaNetwork(normalizedPhone);
+      const recipientSmsId = (entry.smsIds && entry.smsIds[normalizedPhone]) || entry.smsId || null;
+      
+      const submitStatus = entry.submitStatus || (entry.success ? 'accepted' : 'failed');
+      // DO NOT confuse 'SUBMITTED' with 'DELIVERED'. Initial status is submitted / queued unless Arkesel confirms delivery.
+      const initialDeliveryStatus = entry.deliveryStatus || (entry.success ? 'submitted' : 'failed');
+      const initialStatus = entry.status ? entry.status.toUpperCase() : (entry.success ? 'SUBMITTED' : 'FAILED');
+
+      const logRecord: any = {
+        id: 'sms-log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+        smsId: recipientSmsId,
+        businessId: entry.businessId || 'platform',
+        recipient: normalizedPhone,
+        recipientRaw: rawPhone,
+        recipientNormalized: normalizedPhone,
+        network: detected.network,
+        carrierPrefix: detected.prefix,
+        sender: effectiveSender,
+        senderId: effectiveSender,
         message: entry.message,
-        sender: entry.sender,
-        status: entry.status,
+        provider: 'Arkesel',
+        submitStatus,
+        deliveryStatus: initialDeliveryStatus,
+        status: initialStatus,
         success: entry.success,
         type: entry.type || 'sms',
-        timestamp: new Date().toISOString(),
+        timestamp: nowIso,
+        sentAt: nowIso,
+        deliveredAt: initialDeliveryStatus === 'delivered' ? nowIso : null,
         timings: entry.timings,
-        details: entry.responseDetails ? JSON.stringify(entry.responseDetails).slice(0, 300) : ''
+        latencyMs: latency,
+        response: respSummary,
+        rawResponse: rawResponseStr,
+        details: rawResponseStr.slice(0, 300),
+        retryCount: 0
       };
+
       dbData['bos_notification_logs'].unshift(logRecord);
-      // Keep max 500 logs
-      if (dbData['bos_notification_logs'].length > 500) {
-        dbData['bos_notification_logs'] = dbData['bos_notification_logs'].slice(0, 500);
+    });
+
+    // Keep max 500 logs
+    if (dbData['bos_notification_logs'].length > 500) {
+      dbData['bos_notification_logs'] = dbData['bos_notification_logs'].slice(0, 500);
+    }
+    writeDatabase(dbData);
+  } catch (e) {
+    console.warn('Background SMS activity log error:', e);
+  }
+}
+
+// Update SMS record delivery status in local DB and Firestore
+function updateSmsLogDeliveryStatus(smsId: string, arkeselStatus: string, deliveryStatus: string, details?: any) {
+  try {
+    const dbData = readDatabase();
+    const logs = dbData['bos_notification_logs'] || [];
+    let updated = false;
+    const nowIso = new Date().toISOString();
+
+    for (const log of logs) {
+      if (log.smsId === smsId || log.id === smsId) {
+        log.deliveryStatus = deliveryStatus;
+        log.status = arkeselStatus.toUpperCase();
+        if (arkeselStatus.toUpperCase() === 'DELIVERED') {
+          if (!log.deliveredAt) log.deliveredAt = nowIso;
+        }
+        log.updatedAt = nowIso;
+        if (details) {
+          log.deliveryDetails = typeof details === 'string' ? details : JSON.stringify(details);
+        }
+        updated = true;
       }
+    }
+
+    if (updated) {
       writeDatabase(dbData);
-    } catch (e) {
-      console.warn('Background SMS activity log error:', e);
+      // Also update in Firestore if available
+      const firestoreDb = getFirestoreDbInstance();
+      if (firestoreDb) {
+        firestoreDb.collection('bos_notification_logs').where('smsId', '==', smsId).get().then(snap => {
+          snap.forEach(d => {
+            d.ref.set({
+              deliveryStatus,
+              status: arkeselStatus.toUpperCase(),
+              deliveredAt: arkeselStatus.toUpperCase() === 'DELIVERED' ? nowIso : null,
+              updatedAt: nowIso
+            }, { merge: true });
+          });
+        }).catch(() => {});
+      }
     }
-  });
+  } catch (e) {
+    console.warn('Error updating SMS log delivery status:', e);
+  }
 }
 
-// Format registered business name into an Arkesel & telecom compliant GSM Sender ID
-// Supports alphanumeric characters and valid internal spaces (e.g. "Legacy Inc", 10 chars), max 11 characters
-function formatSenderIdFromBusinessName(businessName: string, fallback = 'Legacy Inc'): string {
-  const defaultFallback = (fallback || 'Legacy Inc').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim().slice(0, 11) || 'Legacy Inc';
-  if (!businessName || !businessName.trim()) {
-    return defaultFallback;
+// Query Arkesel API v2 for actual SMS delivery status by SMS ID
+async function queryArkeselSmsStatus(smsId: string): Promise<{
+  success: boolean;
+  status: string;
+  deliveryStatus: string;
+  data?: any;
+  error?: string;
+}> {
+  if (!smsId || !String(smsId).trim()) {
+    return { success: false, status: 'UNKNOWN', deliveryStatus: 'unknown', error: 'Missing smsId' };
+  }
+  const cleanId = String(smsId).trim();
+  const config = inMemorySmsConfig;
+  if (!config.apiKey || !config.apiKey.trim()) {
+    return { success: false, status: 'UNKNOWN', deliveryStatus: 'unknown', error: 'Arkesel API key not configured' };
   }
 
-  // Clean special characters but preserve single internal spaces
-  let cleaned = businessName.trim().replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-  if (!cleaned) return defaultFallback;
+  try {
+    const url = `https://sms.arkesel.com/api/v2/sms/${encodeURIComponent(cleanId)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'api-key': config.apiKey.trim()
+      }
+    });
+    const text = await res.text();
+    let json: any = null;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
 
-  // If length is already <= 11, it is a valid GSM/Arkesel Sender ID (e.g., "Legacy Inc", 10 chars)
-  if (cleaned.length <= 11) {
-    return cleaned;
+    if (res.ok && json?.data?.status) {
+      const rawStatus = String(json.data.status).toUpperCase();
+      let deliveryStatus = 'submitted';
+      if (rawStatus === 'DELIVERED') deliveryStatus = 'delivered';
+      else if (rawStatus === 'NOT_DELIVERED') deliveryStatus = 'not_delivered';
+      else if (rawStatus === 'EXPIRED') deliveryStatus = 'expired';
+      else if (rawStatus === 'PROHIBITED') deliveryStatus = 'prohibited';
+      else if (rawStatus === 'QUEUED') deliveryStatus = 'queued';
+      else if (rawStatus === 'SUBMITTED') deliveryStatus = 'submitted';
+      else deliveryStatus = rawStatus.toLowerCase();
+
+      // Update matching records in database
+      updateSmsLogDeliveryStatus(cleanId, rawStatus, deliveryStatus, json.data);
+
+      return {
+        success: true,
+        status: rawStatus,
+        deliveryStatus,
+        data: json.data
+      };
+    }
+
+    return {
+      success: false,
+      status: 'UNKNOWN',
+      deliveryStatus: 'unknown',
+      error: json?.message || json?.error || `Arkesel returned HTTP ${res.status}`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      status: 'UNKNOWN',
+      deliveryStatus: 'unknown',
+      error: err.message || 'Network error querying Arkesel delivery status'
+    };
   }
-
-  // If > 11 chars, try PascalCase without spaces
-  const words = cleaned.split(' ').filter(Boolean);
-  const pascal = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
-  if (pascal.length <= 11) {
-    return pascal;
-  }
-
-  // If first word alone is descriptive and <= 11 chars (e.g. "Acapulco" from "Acapulco Foods")
-  if (words[0] && words[0].length >= 3 && words[0].length <= 11) {
-    return words[0];
-  }
-
-  return pascal.slice(0, 11);
 }
 
-// Detect recipient mobile operator in Ghana for carrier-optimized routing
-function detectGhanaNetwork(phone: string): { network: 'MTN' | 'Telecel' | 'AirtelTigo' | 'Other'; isGhana: boolean } {
-  const norm = normalizePhoneNumber(phone);
-  if (norm.startsWith('233') && norm.length === 12) {
-    const prefix = norm.substring(3, 5);
-    if (['24', '54', '55', '59', '53'].includes(prefix)) {
-      return { network: 'MTN', isGhana: true };
+// Asynchronous background delivery tracker to update Arkesel terminal delivery status without blocking requests
+function trackSmsDeliveryAsync(smsId: string, maxPolls = 8, intervalMs = 2500): void {
+  if (!smsId || typeof smsId !== 'string') return;
+  const cleanId = smsId.trim();
+  let pollCount = 0;
+
+  const poll = async () => {
+    pollCount++;
+    try {
+      const res = await queryArkeselSmsStatus(cleanId);
+      console.log(`[Arkesel Status Tracker] Polled ${cleanId} (#${pollCount}/${maxPolls}): Gateway = ${res.status}, Delivery = ${res.deliveryStatus}`);
+      const terminal = ['DELIVERED', 'NOT_DELIVERED', 'EXPIRED', 'PROHIBITED'].includes(res.status);
+      if (terminal || pollCount >= maxPolls) {
+        return;
+      }
+    } catch (e: any) {
+      console.warn(`[Arkesel Status Tracker] Error polling ${cleanId}:`, e.message);
     }
-    if (['20', '50'].includes(prefix)) {
-      return { network: 'Telecel', isGhana: true };
+    if (pollCount < maxPolls) {
+      setTimeout(poll, intervalMs);
     }
-    if (['27', '57', '26', '56'].includes(prefix)) {
-      return { network: 'AirtelTigo', isGhana: true };
-    }
-    return { network: 'Other', isGhana: true };
-  }
-  return { network: 'Other', isGhana: false };
+  };
+
+  setTimeout(poll, intervalMs);
 }
 
 // Lightweight in-memory business metadata cache to avoid disk I/O on critical SMS path
@@ -605,6 +801,18 @@ function resolveRegisteredBusinessName(businessId?: string, businessName?: strin
   return 'Legacy Inc';
 }
 
+function formatSenderIdFromBusinessName(name: string, fallback: string): string {
+  if (!name || !name.trim()) return fallback;
+  const trimmed = name.trim();
+  const cleaned = trimmed.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return fallback;
+  if (cleaned.length <= 11) return cleaned;
+  // If longer than 11 chars with spaces, try compacting spaces first (e.g. "GilChris Mart" -> "GilChrisMart")
+  const noSpaces = cleaned.replace(/\s+/g, '');
+  if (noSpaces.length <= 11) return noSpaces;
+  return noSpaces.slice(0, 11);
+}
+
 // Reusable server-side Arkesel SMS dispatch service — optimized for sub-second, direct execution
 async function dispatchArkeselSms({
   recipients,
@@ -626,9 +834,14 @@ async function dispatchArkeselSms({
   clientTriggerTime?: number;
 }): Promise<{
   success: boolean;
-  status: 'Successfully sent' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error';
+  status: 'Successfully sent' | 'SUBMITTED' | 'Failed' | 'Invalid API key' | 'Invalid phone number' | 'Insufficient SMS balance' | 'Gateway/API error' | 'Network error' | string;
   message: string;
   recipient: string;
+  submitStatus?: string;
+  deliveryStatus?: string;
+  smsId?: string;
+  smsIds?: string[];
+  recipients?: string[];
   details?: any;
   deduplicated?: boolean;
   timings: {
@@ -639,6 +852,7 @@ async function dispatchArkeselSms({
     submissionCompletionTime: number;
     arkeselLatencyMs: number;
     totalSubmissionMs: number;
+    totalPipelineMs: number;
   };
 }> {
   const backendReceivedTime = Date.now();
@@ -654,6 +868,7 @@ async function dispatchArkeselSms({
 
   if (cleanedRecipients.length === 0) {
     const completionTime = Date.now();
+    const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
     return {
       success: false,
       status: 'Invalid phone number',
@@ -666,7 +881,8 @@ async function dispatchArkeselSms({
         arkeselResponseTime: completionTime,
         submissionCompletionTime: completionTime,
         arkeselLatencyMs: 0,
-        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        totalSubmissionMs: totalMs,
+        totalPipelineMs: totalMs
       }
     };
   }
@@ -674,6 +890,7 @@ async function dispatchArkeselSms({
   let trimmedMessage = (message || '').trim();
   if (!trimmedMessage) {
     const completionTime = Date.now();
+    const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
     return {
       success: false,
       status: 'Failed',
@@ -686,7 +903,8 @@ async function dispatchArkeselSms({
         arkeselResponseTime: completionTime,
         submissionCompletionTime: completionTime,
         arkeselLatencyMs: 0,
-        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        totalSubmissionMs: totalMs,
+        totalPipelineMs: totalMs
       }
     };
   }
@@ -705,6 +923,7 @@ async function dispatchArkeselSms({
 
   if (!config.isEnabled) {
     const completionTime = Date.now();
+    const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
     return {
       success: false,
       status: 'Failed',
@@ -717,13 +936,15 @@ async function dispatchArkeselSms({
         arkeselResponseTime: completionTime,
         submissionCompletionTime: completionTime,
         arkeselLatencyMs: 0,
-        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        totalSubmissionMs: totalMs,
+        totalPipelineMs: totalMs
       }
     };
   }
 
   if (!config.apiKey || config.apiKey.trim() === '') {
     const completionTime = Date.now();
+    const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
     return {
       success: false,
       status: 'Invalid API key',
@@ -736,7 +957,8 @@ async function dispatchArkeselSms({
         arkeselResponseTime: completionTime,
         submissionCompletionTime: completionTime,
         arkeselLatencyMs: 0,
-        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        totalSubmissionMs: totalMs,
+        totalPipelineMs: totalMs
       }
     };
   }
@@ -746,6 +968,7 @@ async function dispatchArkeselSms({
     const meta = getBusinessMetaCached(businessId);
     if (meta && meta.smsEnabled === false) {
       const completionTime = Date.now();
+      const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
       const disabledMsg = 'SMS service is currently disabled by the Super Admin for this business.';
       console.warn(`[Arkesel SMS Blocked] Business ${businessId} has SMS disabled by Super Admin.`);
       return {
@@ -760,7 +983,8 @@ async function dispatchArkeselSms({
           arkeselResponseTime: completionTime,
           submissionCompletionTime: completionTime,
           arkeselLatencyMs: 0,
-          totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+          totalSubmissionMs: totalMs,
+          totalPipelineMs: totalMs
         }
       };
     }
@@ -772,6 +996,7 @@ async function dispatchArkeselSms({
   if (cached && (Date.now() - cached.timestamp < 5000)) {
     console.log(`[Arkesel SMS Deduplication] Suppressed duplicate SMS dispatch for key ${dedupeKey}`);
     const completionTime = Date.now();
+    const totalMs = completionTime - (clientTriggerTime || backendReceivedTime);
     return {
       ...cached.result,
       deduplicated: true,
@@ -783,36 +1008,25 @@ async function dispatchArkeselSms({
         arkeselResponseTime: completionTime,
         submissionCompletionTime: completionTime,
         arkeselLatencyMs: 0,
-        totalSubmissionMs: completionTime - (clientTriggerTime || backendReceivedTime)
+        totalSubmissionMs: totalMs,
+        totalPipelineMs: totalMs
       }
     };
   }
 
-  const configuredEndpoint = config.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms';
+  // The registered approved sender ID configured in Arkesel
+  const registeredApprovedSender = (config.senderId || 'Legacy Inc').trim();
 
-  // Determine Sender ID for universal multi-network delivery (MTN, Telecel, AirtelTigo):
-  // User mandate: When SMS receipt is sent to customers, the sender's name MUST be the name of the registered business.
-  const registeredApprovedSender = formatSenderIdFromBusinessName(config.senderId || 'Legacy Inc');
-  
-  // Resolve the registered business name
-  let effectiveSender = registeredApprovedSender;
-  if (targetBusinessName && targetBusinessName.trim()) {
-    effectiveSender = formatSenderIdFromBusinessName(targetBusinessName, registeredApprovedSender);
-  } else if (senderId && senderId.trim() && senderId !== 'BusinessOS' && senderId !== 'Platform') {
-    effectiveSender = formatSenderIdFromBusinessName(senderId, registeredApprovedSender);
-  }
+  // The sender of the SMS should be the name of the business
+  const rawSenderCandidate = (senderId && senderId.trim() && senderId.trim() !== 'Legacy Inc')
+    ? senderId.trim()
+    : (targetBusinessName && targetBusinessName.trim() && targetBusinessName.trim() !== 'platform')
+      ? targetBusinessName.trim()
+      : (businessName && businessName.trim() && businessName.trim() !== 'platform')
+        ? businessName.trim()
+        : registeredApprovedSender;
 
-  // Detect Ghanaian networks for intelligent instant routing
-  const hasNonMtnRecipients = cleanedRecipients.some(r => {
-    const net = detectGhanaNetwork(r);
-    return net.network === 'Telecel' || net.network === 'AirtelTigo';
-  });
-
-  // Prefer the direct carrier route (V1) for sub-second, instant delivery across Telecel, AirtelTigo, and MTN
-  const useDirectRoutePrimary = 
-    configuredEndpoint.includes('/sms/api') || 
-    !configuredEndpoint.includes('/api/v2/') || 
-    hasNonMtnRecipients;
+  let effectiveSender = formatSenderIdFromBusinessName(rawSenderCandidate, registeredApprovedSender);
 
   const arkeselRequestStartTime = Date.now();
   let arkeselResponseTime = Date.now();
@@ -822,124 +1036,123 @@ async function dispatchArkeselSms({
   let data: any = null;
   let responseText = '';
 
+  const v2Endpoint = 'https://sms.arkesel.com/api/v2/sms/send';
+
   try {
-    if (useDirectRoutePrimary) {
-      // 1. FAST DIRECT CARRIER ROUTE (Instant SMPP pipe to MTN, Telecel, AirtelTigo)
-      const dispatchV1 = async (senderToUse: string) => {
-        const v1Url = `https://sms.arkesel.com/sms/api?action=send-sms&api_key=${encodeURIComponent(config.apiKey.trim())}&to=${encodeURIComponent(cleanedRecipients.join(','))}&from=${encodeURIComponent(senderToUse)}&sms=${encodeURIComponent(trimmedMessage)}`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
-        try {
-          const res = await fetch(v1Url, {
-            method: 'GET',
-            headers: { 'Connection': 'keep-alive' },
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          const text = await res.text();
-          let parsed: any = null;
-          try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
-          return { res, text, parsed };
-        } catch (err) {
-          clearTimeout(timeoutId);
-          throw err;
-        }
-      };
-
-      try {
-        let v1Result = await dispatchV1(effectiveSender);
-        arkeselResponseTime = Date.now();
-        statusCode = v1Result.res.status;
-        responseText = v1Result.text;
-        data = v1Result.parsed;
-
-        let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-        
-        // If custom sender failed or was rejected, retry immediately with the registered approved Sender ID
-        const v1Failed = !v1Result.res.ok || (data?.code && data?.code !== 'ok' && data?.code !== 1000 && !lowerMsg.includes('successfully sent'));
-        if (v1Failed && effectiveSender !== registeredApprovedSender) {
-          console.warn(`[Arkesel Direct Carrier Retry] Sender "${effectiveSender}" not accepted. Retrying with approved sender "${registeredApprovedSender}"`);
-          effectiveSender = registeredApprovedSender;
-          v1Result = await dispatchV1(registeredApprovedSender);
-          arkeselResponseTime = Date.now();
-          statusCode = v1Result.res.status;
-          responseText = v1Result.text;
-          data = v1Result.parsed;
-          lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-        }
-
-        if (v1Result.res.ok && (data?.code === 'ok' || lowerMsg.includes('successfully sent') || data?.code === 1000)) {
-          isSuccess = true;
-          status = 'Successfully sent';
-        }
-      } catch (v1Err) {
-        console.warn('[Arkesel Direct Route Failed, falling back to V2 REST API]:', v1Err);
-      }
-    }
-
-    // 2. FALLBACK TO V2 REST API IF DIRECT ROUTE DID NOT SUCCEED OR V2 WAS SPECIFICALLY REQUESTED
-    if (!isSuccess) {
-      const v2Endpoint = 'https://sms.arkesel.com/api/v2/sms/send';
-      const payload: any = {
-        sender: effectiveSender,
+    // 1. UNIVERSAL ARKESEL V2 POST REQUEST FOR ALL GHANAIAN CARRIERS (MTN, Telecel, AirtelTigo)
+    const executeArkeselV2Send = async (senderToUse: string) => {
+      const payload = {
+        sender: senderToUse,
         message: trimmedMessage,
         recipients: cleanedRecipients
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout for high-load telecom gateways
 
-      const response = await fetch(v2Endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': config.apiKey.trim(),
-          'Connection': 'keep-alive'
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      arkeselResponseTime = Date.now();
-      statusCode = response.status;
-      responseText = await response.text();
       try {
-        data = JSON.parse(responseText);
-      } catch {
-        data = { raw: responseText };
+        const res = await fetch(v2Endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'api-key': config.apiKey.trim()
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        const text = await res.text();
+        let parsed: any = null;
+        try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
+        return { res, text, parsed };
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
       }
+    };
 
-      const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-      if (response.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || lowerMsg.includes('success') || lowerMsg.includes('submitted'))) {
-        isSuccess = true;
-        status = 'Successfully sent';
-      }
+    // First attempt with effectiveSender
+    let sendResult = await executeArkeselV2Send(effectiveSender);
+    arkeselResponseTime = Date.now();
+    statusCode = sendResult.res.status;
+    responseText = sendResult.text;
+    data = sendResult.parsed;
+
+    let lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
+
+    // Check if custom sender ID was rejected or unapproved; if so, retry immediately with approved sender
+    const isSenderRejected = 
+      statusCode === 403 || 
+      lowerMsg.includes('sender') || 
+      lowerMsg.includes('sender id') || 
+      lowerMsg.includes('not approved') || 
+      lowerMsg.includes('not registered');
+
+    if (!sendResult.res.ok && isSenderRejected && effectiveSender !== registeredApprovedSender) {
+      console.warn(`[Arkesel SMS] Sender ID "${effectiveSender}" not approved. Retrying with approved sender "${registeredApprovedSender}"`);
+      effectiveSender = registeredApprovedSender;
+      sendResult = await executeArkeselV2Send(registeredApprovedSender);
+      arkeselResponseTime = Date.now();
+      statusCode = sendResult.res.status;
+      responseText = sendResult.text;
+      data = sendResult.parsed;
+      lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
     }
 
-    const lowerMsg = ((data?.message || data?.error || '') + ' ' + responseText).toLowerCase();
-
-    if (isSuccess) {
-      inMemorySmsConfig.totalSentCount = (inMemorySmsConfig.totalSentCount || 0) + cleanedRecipients.length;
-      inMemorySmsConfig.lastTestedAt = new Date().toISOString();
-      inMemorySmsConfig.lastTestStatus = 'Active & Connected';
-      inMemorySmsConfig.lastTestMessage = data?.message || 'Successfully Sent (Instant Carrier Route)';
-      setImmediate(() => writeSmsConfig(inMemorySmsConfig));
-    }
-
-    if (!isSuccess) {
-      if (statusCode === 401 || statusCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication') || lowerMsg.includes('invalid key')) {
+    // Determine if Arkesel accepted the submission
+    // Note: In Arkesel V2, success returns status: 'success' and data: [{ id: "...", recipient: "..." }]
+    if (sendResult.res.ok && (data?.status === 'success' || data?.code === 1000 || data?.code === '1000' || Array.isArray(data?.data) || lowerMsg.includes('success') || lowerMsg.includes('submitted'))) {
+      isSuccess = true;
+      status = 'Successfully sent';
+    } else {
+      isSuccess = false;
+      if (statusCode === 401 || statusCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('unauthorized') || lowerMsg.includes('invalid key')) {
         status = 'Invalid API key';
-      } else if (lowerMsg.includes('balance') || lowerMsg.includes('credit') || lowerMsg.includes('insufficient') || lowerMsg.includes('fund') || lowerMsg.includes('units')) {
+      } else if (lowerMsg.includes('balance') || lowerMsg.includes('credit') || lowerMsg.includes('insufficient') || lowerMsg.includes('units')) {
         status = 'Insufficient SMS balance';
-      } else if (lowerMsg.includes('recipient') || lowerMsg.includes('phone') || lowerMsg.includes('destination') || lowerMsg.includes('invalid number') || lowerMsg.includes('receiver')) {
+      } else if (lowerMsg.includes('recipient') || lowerMsg.includes('phone') || lowerMsg.includes('invalid number')) {
         status = 'Invalid phone number';
       } else if (statusCode >= 500) {
         status = 'Gateway/API error';
       } else {
         status = 'Failed';
       }
+    }
 
+    // Extract Arkesel SMS IDs for each recipient
+    const recipientSmsIds: { [recipient: string]: string } = {};
+    const extractedIds: string[] = [];
+    if (Array.isArray(data?.data)) {
+      data.data.forEach((item: any) => {
+        if (item && item.id) {
+          const recNorm = normalizePhoneNumber(item.recipient || '');
+          if (recNorm) {
+            recipientSmsIds[recNorm] = String(item.id);
+          }
+          extractedIds.push(String(item.id));
+        }
+      });
+    } else if (data?.data?.id) {
+      extractedIds.push(String(data.data.id));
+      if (cleanedRecipients[0]) {
+        recipientSmsIds[cleanedRecipients[0]] = String(data.data.id);
+      }
+    } else if (data?.id) {
+      extractedIds.push(String(data.id));
+      if (cleanedRecipients[0]) {
+        recipientSmsIds[cleanedRecipients[0]] = String(data.id);
+      }
+    }
+
+    const primarySmsId = extractedIds[0] || null;
+
+    if (isSuccess) {
+      inMemorySmsConfig.totalSentCount = (inMemorySmsConfig.totalSentCount || 0) + cleanedRecipients.length;
+      inMemorySmsConfig.lastTestedAt = new Date().toISOString();
+      inMemorySmsConfig.lastTestStatus = 'Active & Connected';
+      inMemorySmsConfig.lastTestMessage = data?.message || 'Universal Arkesel V2 submission accepted';
+      setImmediate(() => writeSmsConfig(inMemorySmsConfig));
+    } else {
       inMemorySmsConfig.lastTestedAt = new Date().toISOString();
       inMemorySmsConfig.lastTestStatus = status;
       inMemorySmsConfig.lastTestMessage = data?.message || data?.error || responseText.slice(0, 100);
@@ -950,13 +1163,25 @@ async function dispatchArkeselSms({
     const arkeselLatencyMs = arkeselResponseTime - arkeselRequestStartTime;
     const totalSubmissionMs = submissionCompletionTime - (clientTriggerTime || backendReceivedTime);
 
-    console.log(`[Arkesel SMS INSTANT] Dispatched to ${cleanedRecipients.join(', ')} -> Status: ${status} (Gateway Latency: ${arkeselLatencyMs}ms, Total: ${totalSubmissionMs}ms)`);
+    // CRITICAL: DO NOT confuse "SUBMITTED" with "DELIVERED".
+    // Initial status after gateway acceptance is "SUBMITTED" with deliveryStatus "submitted".
+    // Only Arkesel status query or delivery webhook will update this to "DELIVERED".
+    const submitStatus = isSuccess ? 'accepted' : 'failed';
+    const deliveryStatus = isSuccess ? 'submitted' : 'failed';
+    const formalStatus = isSuccess ? 'SUBMITTED' : status;
+
+    console.log(`[Arkesel V2 SMS] Recipient(s): ${cleanedRecipients.join(', ')} -> Accepted: ${isSuccess}, SMS ID: ${primarySmsId || 'none'} (Latency: ${arkeselLatencyMs}ms, Total: ${totalSubmissionMs}ms)`);
 
     const finalResult = {
       success: isSuccess,
-      status,
-      message: data?.message || data?.error || (isSuccess ? 'SMS successfully submitted to Arkesel gateway' : `Arkesel dispatch failed with status: ${status}`),
+      status: formalStatus,
+      submitStatus,
+      deliveryStatus,
+      smsId: primarySmsId,
+      smsIds: extractedIds,
+      message: data?.message || data?.error || (isSuccess ? 'SMS successfully submitted to Arkesel gateway' : `Arkesel dispatch failed: ${status}`),
       recipient: cleanedRecipients.join(', '),
+      recipients: cleanedRecipients,
       details: data,
       timings: {
         clientTriggerTime,
@@ -965,7 +1190,8 @@ async function dispatchArkeselSms({
         arkeselResponseTime,
         submissionCompletionTime,
         arkeselLatencyMs,
-        totalSubmissionMs
+        totalSubmissionMs,
+        totalPipelineMs: totalSubmissionMs
       }
     };
 
@@ -975,18 +1201,32 @@ async function dispatchArkeselSms({
       result: finalResult
     });
 
-    // Record log asynchronously without blocking the response
+    // Record accurate database log with carrier, normalized numbers, SMS IDs, and initial submission status
     logSmsActivityAsync({
       businessId,
       recipients: cleanedRecipients,
+      rawRecipients: rawList,
       message: trimmedMessage,
       sender: effectiveSender,
-      status,
+      senderId: effectiveSender,
+      status: formalStatus,
+      submitStatus,
+      deliveryStatus,
       success: isSuccess,
+      smsIds: recipientSmsIds,
+      smsId: primarySmsId,
       type,
       responseDetails: data,
       timings: finalResult.timings
     });
+
+    // Detailed server-side audit log for complete transparency (Requirement 14)
+    console.log(`[SMS AUDIT LOG] Original: "${rawList.join(', ')}" | Normalized: "${cleanedRecipients.join(', ')}" | Sender: "${effectiveSender}" | SMS ID: "${primarySmsId || 'none'}" | HTTP: ${statusCode} | Submission Status: "${formalStatus}" | Delivery Status: "${deliveryStatus}" | Latency: ${arkeselLatencyMs}ms | Timestamp: "${new Date().toISOString()}"`);
+
+    // Asynchronous background status polling to automatically confirm handset delivery without delaying response
+    if (primarySmsId) {
+      trackSmsDeliveryAsync(primarySmsId);
+    }
 
     return finalResult;
   } catch (err: any) {
@@ -1006,15 +1246,20 @@ async function dispatchArkeselSms({
       arkeselResponseTime: submissionCompletionTime,
       submissionCompletionTime,
       arkeselLatencyMs,
-      totalSubmissionMs
+      totalSubmissionMs,
+      totalPipelineMs: totalSubmissionMs
     };
 
     logSmsActivityAsync({
       businessId,
       recipients: cleanedRecipients,
+      rawRecipients: rawList,
       message: trimmedMessage,
       sender: effectiveSender,
-      status,
+      senderId: effectiveSender,
+      status: 'FAILED',
+      submitStatus: 'failed',
+      deliveryStatus: 'failed',
       success: false,
       type,
       responseDetails: { error: errorMsg },
@@ -1024,6 +1269,8 @@ async function dispatchArkeselSms({
     return {
       success: false,
       status,
+      submitStatus: 'failed' as const,
+      deliveryStatus: 'failed' as const,
       message: errorMsg,
       recipient: cleanedRecipients.join(', '),
       timings: errorTimings
@@ -1371,7 +1618,7 @@ app.post('/api/db/delete-business', async (req, res) => {
 // =========================================================================
 
 // API 3.6: Get Arkesel SMS Configuration (API Key is masked for security)
-app.get('/api/admin/sms-config', (req, res) => {
+const getSmsConfigHandler = (req: any, res: any) => {
   try {
     const config = readSmsConfig();
     const hasKey = Boolean(config.apiKey && config.apiKey.trim().length > 0);
@@ -1393,10 +1640,14 @@ app.get('/api/admin/sms-config', (req, res) => {
       totalSentCount: config.totalSentCount || 0
     });
   } catch (err: any) {
-    console.error('Error in GET /api/admin/sms-config:', err);
+    console.error('Error in GET SMS config:', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve SMS configuration' });
   }
-});
+};
+
+app.get('/api/admin/sms-config', getSmsConfigHandler);
+app.get('/api/admin/sms/config', getSmsConfigHandler);
+app.get('/api/admin/sms/settings', getSmsConfigHandler);
 
 // API 3.7: Update Central Arkesel SMS Settings (Persisted to Firestore as source of truth)
 app.post('/api/admin/sms-config', async (req, res) => {
@@ -1586,7 +1837,8 @@ app.post('/api/admin/sms/test-connection', async (req, res) => {
 // API 3.8: Send Test SMS via real Arkesel API (Uses saved credentials)
 app.post('/api/admin/sms/test', async (req, res) => {
   try {
-    const { phoneNumber, message, clientTriggerTime, businessId, businessName } = req.body;
+    const { phoneNumber: rawPhone, recipient, phone, message, clientTriggerTime, businessId, businessName } = req.body;
+    const phoneNumber = rawPhone || recipient || phone;
 
     if (!phoneNumber || !String(phoneNumber).trim()) {
       return res.status(400).json({
@@ -1601,21 +1853,32 @@ app.post('/api/admin/sms/test', async (req, res) => {
       ? String(message).trim()
       : `${regName || 'BusinessOS'}: SMS configuration test successful.`;
 
+    const approvedFallback = (inMemorySmsConfig.senderId || 'Legacy Inc').trim();
+    const businessSender = regName ? formatSenderIdFromBusinessName(regName, approvedFallback) : approvedFallback;
+
     const result = await dispatchArkeselSms({
       recipients: [phoneNumber],
       message: testMessage,
       businessId: businessId || 'platform',
-      businessName: regName,
-      senderId: regName,
+      businessName: regName || businessSender,
+      senderId: businessSender,
       type: 'test_sms',
       clientTriggerTime: Number(clientTriggerTime) || undefined
     });
 
+    const isDelivered = result.deliveryStatus === 'delivered' || result.status === 'DELIVERED';
+    const isSubmitted = result.success || result.status === 'SUBMITTED';
+
+    let displayMessage = '✕ Test SMS failed. Please check your Arkesel configuration.';
+    if (isDelivered) {
+      displayMessage = '✓ SMS delivered successfully';
+    } else if (isSubmitted) {
+      displayMessage = 'SMS submitted successfully to Arkesel. Delivery confirmation pending.';
+    }
+
     return res.json({
       ...result,
-      displayMessage: result.success
-        ? '✓ Test SMS sent successfully.'
-        : '✕ Test SMS failed. Please check your Arkesel configuration.'
+      displayMessage
     });
   } catch (err: any) {
     console.error('Error in POST /api/admin/sms/test:', err);
@@ -1632,7 +1895,8 @@ app.post('/api/admin/sms/test', async (req, res) => {
 // API 3.9: Universal Platform SMS Dispatch (used by POS, Invoices, Receipts, School announcements, Appointments, etc.)
 app.post('/api/sms/send', async (req, res) => {
   try {
-    const { recipient, message, senderId, idempotencyKey, businessId, businessName, type, clientTriggerTime } = req.body;
+    const { recipient: rawRecipient, phoneNumber, recipients, phone, message, senderId, idempotencyKey, businessId, businessName, type, clientTriggerTime } = req.body;
+    const recipient = rawRecipient || phoneNumber || recipients || phone;
 
     if (!recipient) {
       return res.status(400).json({
@@ -1672,14 +1936,307 @@ app.post('/api/sms/send', async (req, res) => {
   }
 });
 
-// API 3.10: SMS Delivery & Audit Logs
+// API 3.10: SMS Delivery & Audit Logs (Accurately reflecting Arkesel real status without conflating Submitted with Delivered)
 app.get('/api/admin/sms/logs', (req, res) => {
   try {
     const dbData = readDatabase();
-    const logs = (dbData['bos_notification_logs'] || []).filter((l: any) => l && (l.type === 'sms' || l.type === 'test_sms' || l.type === 'transactional'));
-    return res.json({ success: true, logs: logs.slice(0, 100) });
+    const rawLogs = (dbData['bos_notification_logs'] || []).filter((l: any) => l && (l.type === 'sms' || l.type === 'test_sms' || l.type === 'transactional'));
+    const logs = rawLogs.map((l: any) => {
+      const recipientPhone = l.recipientNormalized || l.recipient || '';
+      const detected = detectGhanaNetwork(recipientPhone);
+      const latency = l.latencyMs || l.timings?.arkeselLatencyMs || l.timings?.totalPipelineMs || l.timings?.totalSubmissionMs || 0;
+      
+      let respSummary = l.response || 'OK';
+      if (!l.response && l.details) {
+        try {
+          const parsed = typeof l.details === 'string' ? JSON.parse(l.details) : l.details;
+          respSummary = parsed.message || parsed.status || (l.success ? 'Accepted' : 'Failed');
+        } catch {
+          respSummary = String(l.details).slice(0, 50);
+        }
+      }
+
+      // Maintain actual Arkesel status: SUBMITTED, QUEUED, DELIVERED, NOT_DELIVERED, EXPIRED, PROHIBITED, FAILED
+      const rawStatus = (l.status || (l.success ? 'SUBMITTED' : 'FAILED')).toUpperCase();
+      const deliveryStatus = l.deliveryStatus || (rawStatus === 'DELIVERED' ? 'delivered' : (l.success ? 'submitted' : 'failed'));
+
+      return {
+        ...l,
+        recipient: recipientPhone,
+        recipientRaw: l.recipientRaw || recipientPhone,
+        recipientNormalized: recipientPhone,
+        network: l.network || detected.network,
+        carrierPrefix: l.carrierPrefix || detected.prefix,
+        senderId: l.senderId || l.sender || 'Legacy Inc',
+        status: rawStatus,
+        deliveryStatus,
+        submitStatus: l.submitStatus || (l.success ? 'accepted' : 'failed'),
+        smsId: l.smsId || null,
+        sentAt: l.sentAt || l.timestamp,
+        deliveredAt: l.deliveredAt || (deliveryStatus === 'delivered' ? (l.updatedAt || l.timestamp) : null),
+        latencyMs: latency,
+        response: respSummary,
+        success: l.success !== false
+      };
+    });
+    return res.json({ success: true, logs: logs.slice(0, 150) });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve logs' });
+  }
+});
+
+// API 3.11: Query Real Arkesel Delivery Status by SMS ID
+app.get('/api/admin/sms/status/:smsId', async (req, res) => {
+  try {
+    const { smsId } = req.params;
+    if (!smsId) {
+      return res.status(400).json({ success: false, error: 'SMS ID is required' });
+    }
+    const result = await queryArkeselSmsStatus(smsId);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to query SMS status' });
+  }
+});
+
+app.post('/api/admin/sms/check-status', async (req, res) => {
+  try {
+    const { smsId } = req.body;
+    if (!smsId) {
+      return res.status(400).json({ success: false, error: 'SMS ID is required' });
+    }
+    const result = await queryArkeselSmsStatus(smsId);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to query SMS status' });
+  }
+});
+
+// API 3.12: Batch Refresh Pending SMS Delivery Statuses from Arkesel
+app.post('/api/admin/sms/refresh-statuses', async (req, res) => {
+  try {
+    const dbData = readDatabase();
+    const rawLogs = (dbData['bos_notification_logs'] || []).filter((l: any) => l && (l.type === 'sms' || l.type === 'test_sms' || l.type === 'transactional'));
+    
+    // Find logs with SMS ID that are still pending (submitted or queued) from the last 24 hours
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const pendingLogs = rawLogs.filter((l: any) => {
+      const hasId = Boolean(l.smsId);
+      const isPending = l.deliveryStatus === 'submitted' || l.deliveryStatus === 'queued' || l.status === 'SUBMITTED' || l.status === 'QUEUED';
+      const isRecent = new Date(l.timestamp || l.sentAt || 0).getTime() > oneDayAgo;
+      return hasId && isPending && isRecent;
+    }).slice(0, 20); // Check up to 20 recent pending messages
+
+    const updates: any[] = [];
+    for (const log of pendingLogs) {
+      try {
+        const queryRes = await queryArkeselSmsStatus(log.smsId);
+        updates.push({
+          smsId: log.smsId,
+          recipient: log.recipient,
+          previousStatus: log.status,
+          currentStatus: queryRes.status,
+          deliveryStatus: queryRes.deliveryStatus
+        });
+      } catch (err) {
+        // Continue with others
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Checked ${pendingLogs.length} pending SMS records.`,
+      checkedCount: pendingLogs.length,
+      updates
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to refresh SMS statuses' });
+  }
+});
+
+// API 3.13: Public Webhook / Callback Endpoint for Arkesel Delivery Reports (DLVR)
+const handleSmsWebhook = (req: any, res: any) => {
+  try {
+    const smsId = req.body?.sms_id || req.body?.id || req.query?.sms_id || req.query?.id;
+    const rawStatus = req.body?.status || req.body?.delivery_status || req.query?.status || req.query?.delivery_status;
+
+    if (smsId && rawStatus) {
+      const upperStatus = String(rawStatus).toUpperCase();
+      let deliveryStatus = 'submitted';
+      if (upperStatus === 'DELIVERED') deliveryStatus = 'delivered';
+      else if (upperStatus === 'NOT_DELIVERED') deliveryStatus = 'not_delivered';
+      else if (upperStatus === 'EXPIRED') deliveryStatus = 'expired';
+      else if (upperStatus === 'PROHIBITED') deliveryStatus = 'prohibited';
+      else if (upperStatus === 'QUEUED') deliveryStatus = 'queued';
+      else if (upperStatus === 'SUBMITTED') deliveryStatus = 'submitted';
+      else deliveryStatus = upperStatus.toLowerCase();
+
+      updateSmsLogDeliveryStatus(String(smsId).trim(), upperStatus, deliveryStatus, req.body || req.query);
+      console.log(`[Arkesel Webhook] SMS ${smsId} delivery status updated to: ${upperStatus} (${deliveryStatus})`);
+    }
+
+    // Always respond 200 immediately
+    return res.status(200).json({ status: 'success', message: 'Webhook acknowledged' });
+  } catch (err: any) {
+    console.warn('[Arkesel Webhook Error]:', err);
+    return res.status(200).json({ status: 'received_with_warning' });
+  }
+};
+app.post('/api/sms/callback', handleSmsWebhook);
+app.get('/api/sms/callback', handleSmsWebhook);
+
+// API 3.14: Multi-Network Diagnostic Test Function (MTN, Telecel, AirtelTigo)
+app.post('/api/admin/sms/diagnostic', async (req, res) => {
+  try {
+    const { mtnNumber, telecelNumber, airtelTigoNumber, senderId, customMessage } = req.body;
+
+    const testTargets = [
+      { network: 'MTN', defaultPhone: '0244123456', phone: mtnNumber || '0244123456' },
+      { network: 'Telecel', defaultPhone: '0208002240', phone: telecelNumber || '0208002240' },
+      { network: 'AirtelTigo', defaultPhone: '0277653421', phone: airtelTigoNumber || '0277653421' }
+    ];
+
+    const config = inMemorySmsConfig;
+    if (!config.apiKey || !config.apiKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Arkesel API key is not configured. Please save your API key in Super Admin → SMS Settings.'
+      });
+    }
+
+    const testSenderId = (config.senderId || 'Legacy Inc').trim();
+
+    const results = await Promise.all(testTargets.map(async (target) => {
+      const rawNumber = String(target.phone).trim();
+      const normalizedNumber = normalizePhoneNumber(rawNumber);
+      const detected = detectGhanaNetwork(normalizedNumber);
+      const messageBody = (customMessage && String(customMessage).trim())
+        ? String(customMessage).trim()
+        : `BusinessOS ${target.network} carrier diagnostic verification test`;
+
+      const startTime = Date.now();
+      let httpStatus = 0;
+      let fullResponse: any = null;
+      let accepted = false;
+      let smsId: string | null = null;
+      let specificFailureReason: string | null = null;
+
+      try {
+        const payload = {
+          sender: testSenderId,
+          message: messageBody,
+          recipients: [normalizedNumber]
+        };
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout for high-load telecom gateways
+
+        const response = await fetch('https://sms.arkesel.com/api/v2/sms/send', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'api-key': config.apiKey.trim()
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        httpStatus = response.status;
+        const text = await response.text();
+        try { fullResponse = JSON.parse(text); } catch { fullResponse = { raw: text }; }
+
+        accepted = response.ok && (fullResponse?.status === 'success' || Array.isArray(fullResponse?.data) || fullResponse?.code === 1000);
+
+        if (Array.isArray(fullResponse?.data) && fullResponse.data[0]?.id) {
+          smsId = String(fullResponse.data[0].id);
+        } else if (fullResponse?.data?.id) {
+          smsId = String(fullResponse.data.id);
+        } else if (fullResponse?.id) {
+          smsId = String(fullResponse.id);
+        }
+
+        if (!accepted) {
+          specificFailureReason = fullResponse?.message || fullResponse?.error || `Arkesel returned HTTP ${httpStatus}`;
+        }
+
+        const latencyMs = Date.now() - startTime;
+
+        // Record log into database audit
+        logSmsActivityAsync({
+          businessId: 'platform',
+          recipients: [normalizedNumber],
+          rawRecipients: [rawNumber],
+          message: messageBody,
+          sender: testSenderId,
+          senderId: testSenderId,
+          status: accepted ? 'SUBMITTED' : 'FAILED',
+          submitStatus: accepted ? 'accepted' : 'failed',
+          deliveryStatus: accepted ? 'submitted' : 'failed',
+          success: accepted,
+          smsId,
+          type: 'diagnostic_sms',
+          responseDetails: fullResponse,
+          timings: { arkeselLatencyMs: latencyMs }
+        });
+
+        console.log(`[SMS DIAGNOSTIC LOG] Network: ${target.network} | Original: "${rawNumber}" | Normalized: "${normalizedNumber}" | SMS ID: "${smsId || 'none'}" | HTTP: ${httpStatus} | Accepted: ${accepted} | Latency: ${latencyMs}ms`);
+
+        if (smsId) {
+          trackSmsDeliveryAsync(smsId);
+        }
+
+        return {
+          network: target.network,
+          rawNumber,
+          normalizedNumber,
+          detectedCarrier: detected.network,
+          carrierPrefix: detected.prefix,
+          httpStatus,
+          accepted,
+          smsId,
+          submitStatus: accepted ? 'accepted' : 'failed',
+          deliveryStatus: accepted ? 'submitted' : 'failed',
+          currentDeliveryStatus: accepted ? 'SUBMITTED' : 'FAILED',
+          specificFailureReason,
+          fullResponse,
+          latencyMs
+        };
+      } catch (err: any) {
+        return {
+          network: target.network,
+          rawNumber,
+          normalizedNumber,
+          detectedCarrier: detected.network,
+          carrierPrefix: detected.prefix,
+          httpStatus: 0,
+          accepted: false,
+          smsId: null,
+          submitStatus: 'failed',
+          deliveryStatus: 'failed',
+          currentDeliveryStatus: 'FAILED',
+          specificFailureReason: err.message || 'Network error connecting to Arkesel',
+          fullResponse: null,
+          latencyMs: Date.now() - startTime
+        };
+      }
+    }));
+
+    const allAccepted = results.every(r => r.accepted);
+
+    return res.json({
+      success: true,
+      allAccepted,
+      senderId: testSenderId,
+      timestamp: new Date().toISOString(),
+      results
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/admin/sms/diagnostic:', err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Diagnostic execution failed'
+    });
   }
 });
 
