@@ -206,38 +206,46 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
     }
 
     const trimmedEmail = email.trim();
-    const isSuperAdminEmail = trimmedEmail.toLowerCase() === 'su@admin' || trimmedEmail.toLowerCase() === 'admin';
 
-    // Dedicated Super Admin authentication check before normal business user authentication
-    if (isSuperAdminEmail || isAdminLogin) {
-      if ((trimmedEmail.toLowerCase() === 'su@admin' || trimmedEmail.toLowerCase() === 'admin') && password === 'suadmin123') {
-        const adminUser: User = {
-          id: 'u-superadmin',
-          businessId: 'platform',
-          name: 'Platform Administrator',
-          email: trimmedEmail.toLowerCase(),
-          role: 'SUPER_ADMIN',
-          status: 'active',
-          createdAt: new Date().toISOString()
-        };
-        db.setCurrentUser(adminUser);
-        setIsLoading(false);
-        onLoginSuccess(adminUser);
-        return;
-      } else {
-        setError('Invalid Super Admin credentials.');
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmedEmail, password })
+      });
+
+      const data = await resp.json();
+      if (!resp.ok || !data.success) {
+        setError(data.error || 'Invalid email address or password.');
         setIsLoading(false);
         return;
       }
-    } else {
-      // Normal Business Login
+
+      const authenticatedUser: User = data.user;
+      db.setCurrentUser(authenticatedUser, data.token);
+
+      // Trigger cloud pull to populate tenant workspace
+      db.pullFromCloud();
+
+      db.addActivityLog(authenticatedUser.businessId, {
+        userId: authenticatedUser.id,
+        userName: authenticatedUser.name,
+        action: 'User Login',
+        details: `${authenticatedUser.name} authenticated successfully.`
+      });
+
+      setIsLoading(false);
+      onLoginSuccess(authenticatedUser);
+    } catch (netErr) {
+      console.warn('Backend login network note, attempting offline check:', netErr);
+      // Offline fallback: check local user list only if offline
       const users = db.getUsers();
       const hashedInput = await hashPassword(password);
       const matchedUser = users.find(u => 
         u.email.toLowerCase() === trimmedEmail.toLowerCase() && 
         (u.password === password || u.password === hashedInput)
       );
-      
+
       if (!matchedUser) {
         setError('Invalid email address or password.');
         setIsLoading(false);
@@ -250,7 +258,6 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
         return;
       }
 
-      // Check if business itself is active
       const businesses = db.getBusinesses();
       const business = businesses.find(b => b.id === matchedUser.businessId);
       if (business && business.status === 'suspended') {
@@ -259,15 +266,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
         return;
       }
 
-
-
       db.setCurrentUser(matchedUser);
-      db.addActivityLog(matchedUser.businessId, {
-        userId: matchedUser.id,
-        userName: matchedUser.name,
-        action: 'User Login',
-        details: `${matchedUser.name} logged in successfully.`
-      });
       setIsLoading(false);
       onLoginSuccess(matchedUser);
     }
@@ -295,8 +294,46 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
 
     setIsLoading(true);
 
-    // Check if email already used
+    try {
+      const resp = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: trimmedRegEmail,
+          password: regPassword,
+          ownerName: regOwnerName.trim(),
+          businessName: regBusName.trim(),
+          phone: regPhone,
+          category: regCategory
+        })
+      });
+
+      const data = await resp.json();
+      if (!resp.ok || !data.success) {
+        setError(data.error || 'Registration failed. Please try again.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data.business) db.saveBusiness(data.business);
+      if (data.user) {
+        db.saveUser(data.user);
+        db.setCurrentUser(data.user, data.token);
+      }
+      db.pullFromCloud();
+
+      setIsLoading(false);
+      setSuccess('Business workspace successfully provisioned! Logging you in...');
+      setTimeout(() => {
+        onLoginSuccess(data.user);
+      }, 500);
+      return;
+    } catch (netErr) {
+      console.warn('Backend registration network note, using offline provisioning:', netErr);
+    }
+
     const existingUsers = db.getUsers();
+    // Check if email already used locally
     if (existingUsers.some(u => u.email.toLowerCase() === trimmedRegEmail)) {
       setError('An account with this email address is already registered.');
       setIsLoading(false);

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { db, formatCurrency } from '../lib/db';
+import { db, formatCurrency, formatQuantityWithUnit } from '../lib/db';
 import { Business, User, Product, Customer, Sale, Prescription, PharmacyBatch } from '../types';
 import {
   Search,
@@ -321,19 +321,18 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
     // Automatically send SMS receipt via Arkesel upon checkout in the background (silent, non-blocking)
     const targetPhone = selectedCustomer?.phone || '';
     if (targetPhone && business.smsEnabled !== false) {
-      const itemsSummary = saleRecord.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
+      const itemsSummary = saleRecord.items.map(i => (i as any).unitOfMeasurement ? `${formatQuantityWithUnit(i.quantity, (i as any).unitOfMeasurement)} ${i.name}` : `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
       const msg = `${business.name}: Dispensation #${saleRecord.id.slice(-6)} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(saleRecord.total, business.currency || 'GHC')}. Thank you!`;
-      setTimeout(() => {
-        db.sendSms({
-          recipient: targetPhone,
-          message: msg,
-          businessId: business.id,
-          businessName: business.name,
-          type: 'receipt'
-        }).catch(err => {
-          console.warn('Auto SMS error in PharmacyPOS:', err);
-        });
-      }, 0);
+      db.sendSms({
+        recipient: targetPhone,
+        message: msg,
+        businessId: business.id,
+        businessName: business.name,
+        type: 'receipt',
+        clientTriggerTime: Date.now()
+      }).catch(err => {
+        console.warn('Auto SMS error in PharmacyPOS:', err);
+      });
     }
 
     setIsPaymentModalOpen(false);
@@ -355,7 +354,7 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
 
     setIsSendingSms(true);
     try {
-      const itemsSummary = completedSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
+      const itemsSummary = completedSale.items.map(i => (i as any).unitOfMeasurement ? `${formatQuantityWithUnit(i.quantity, (i as any).unitOfMeasurement)} ${i.name}` : `${i.quantity}x ${i.name}`).slice(0, 2).join(', ');
       const msg = `${business.name}: Dispensation #${completedSale.id.slice(-6)} confirmed! Items: ${itemsSummary}. Total: ${formatCurrency(completedSale.total, business.currency || 'GHC')}. Thank you!`;
       
       const res = await db.sendSms({
@@ -363,7 +362,8 @@ export const PharmacyPOS: React.FC<PharmacyPOSProps> = ({
         message: msg,
         businessId: business.id,
         businessName: business.name,
-        type: 'receipt'
+        type: 'receipt',
+        clientTriggerTime: Date.now()
       });
 
       if (res.success) {

@@ -86,42 +86,6 @@ export const SalonDashboard: React.FC<SalonDashboardProps> = ({
 
   return (
     <div className="space-y-8 pb-12">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 bottom-0 opacity-10 pointer-events-none flex items-center pr-8">
-          <Scissors className="w-96 h-96 text-white" />
-        </div>
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-purple-500/20 border border-purple-400/30 rounded-full text-purple-200 text-xs font-bold uppercase tracking-wider">
-              <Sparkles className="h-3.5 w-3.5 text-purple-300" /> Salon & Beauty Studio Workspace
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {business.name}
-            </h1>
-            <p className="text-xs sm:text-sm text-purple-200/80 font-medium">
-              Manage client appointments, beauty services, retail products, staff stylists, and instant POS transactions.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => onNavigate('Appointments')}
-              className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-2xl text-xs shadow-lg transition flex items-center gap-2 cursor-pointer"
-            >
-              <Calendar className="h-4 w-4" /> Book Appointment
-            </button>
-            <button
-              onClick={() => onNavigate('Salon POS')}
-              className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl text-xs shadow-lg transition flex items-center gap-2 cursor-pointer"
-            >
-              <Scissors className="h-4 w-4" /> Launch Salon POS
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Quick Action Pathways */}
       <QuickActionPathways business={business} onNavigate={onNavigate} />
 

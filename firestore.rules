@@ -54,26 +54,34 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ---------------------------------------------------------
+    // CRITICAL: SENSITIVE CREDENTIALS & SYSTEM SECRETS (STRICTLY DENIED)
+    // Secret API keys, credentials, and payment gateway secrets must NEVER
+    // be accessible via direct Firestore client requests.
+    // ---------------------------------------------------------
+    match /bos_sms_config/{document=**} {
+      allow read, write: if false;
+    }
+    match /bos_sms_settings/{document=**} {
+      allow read, write: if false;
+    }
+    match /bos_paystack_settings/{document=**} {
+      allow read, write: if false;
+    }
+    match /bos_paynow_settings/{document=**} {
+      allow read, write: if false;
+    }
+
     // Platform Configuration, Settings & Audits
     match /bos_global_system_config/{id} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
     match /bos_global_features/{id} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
     match /bos_feature_audit_logs/{id} {
-      allow read, write: if true;
-    }
-    match /bos_paynow_settings/{id} {
-      allow read, write: if true;
-    }
-    match /bos_paystack_settings/{id} {
-      allow read, write: if true;
-    }
-    match /bos_sms_settings/{id} {
-      allow read, write: if true;
-    }
-    match /bos_sms_config/{id} {
       allow read, write: if true;
     }
     match /bos_whatsapp_settings/{id} {
@@ -301,9 +309,14 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Universal catch-all for all other applet collections and subcollections
+    // Connection health verification endpoint as per Firebase Guidelines
+    match /test/{id} {
+      allow read: if true;
+    }
+
+    // Default catch-all denies access to any unspecified or internal collections
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

@@ -93,6 +93,7 @@ import { ServiceBusinessDashboard } from './components/ServiceBusinessDashboard'
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { MoreMenu } from './components/MoreMenu';
 import { AccountsReceivable } from './components/AccountsReceivable';
+import { DashboardInventoryAlert } from './components/DashboardInventoryAlert';
 
 import { getIndustryArchetype } from './lib/businessType';
 
@@ -102,7 +103,7 @@ import {
   RotateCcw, Eye, Search, Filter, Calendar, TrendingDown,
   TrendingUp, CreditCard, UserCheck, AlertTriangle, X, Menu, FileDown,
   Bell, Building2, ClipboardList, Shield, RefreshCw, Cloud, CloudOff,
-  Check, Play, Grid, Flame, FileText, Truck, Shirt, Plane, Compass, Send, FileCheck, Pill, Wrench
+  Check, Play, Grid, Flame, FileText, Truck, Shirt, Plane, Compass, Send, FileCheck, Pill, Wrench, Copy
 } from 'lucide-react';
 import { exportSalesToCSV } from './lib/csvExport';
 
@@ -1299,8 +1300,9 @@ export default function App() {
 
   // Isolated business-specific list metrics for searches/filters
   const businessProducts = db.getProducts(activeBusiness.id).filter(p => activeBranchFilterId === 'All' || p.branchId === activeBranchFilterId);
+  const businessDefaultThreshold = typeof activeBusiness.defaultLowStockThreshold === 'number' ? activeBusiness.defaultLowStockThreshold : 5;
   const lowStockProducts = businessProducts.filter(p => {
-    const threshold = typeof p.lowStockThreshold === 'number' ? p.lowStockThreshold : 5;
+    const threshold = typeof p.lowStockThreshold === 'number' ? p.lowStockThreshold : businessDefaultThreshold;
     return p.stockQuantity <= threshold;
   });
   const showLowStockAlert = ['owner', 'manager'].includes(currentUser.role) && 
@@ -1346,6 +1348,27 @@ export default function App() {
       userName: currentUser.name,
       action: 'Stock Adjustment',
       details: `Adjusted "${match.name}" stock level to ${nextStock} (Delta: ${delta}).`
+    });
+
+    triggerReload();
+  };
+
+  // Inventory Low Stock Threshold Adjustment triggers
+  const handleThresholdAdjust = (id: string, newThreshold: number) => {
+    const match = businessProducts.find(p => p.id === id);
+    if (!match) return;
+
+    db.saveProduct(activeBusiness.id, {
+      ...match,
+      lowStockThreshold: Math.max(0, newThreshold),
+      updatedAt: new Date().toISOString()
+    });
+
+    db.addActivityLog(activeBusiness.id, {
+      userId: currentUser.id,
+      userName: currentUser.name,
+      action: 'Threshold Updated',
+      details: `Updated low stock alert threshold for "${match.name}" to ${newThreshold} units.`
     });
 
     triggerReload();
@@ -1457,30 +1480,36 @@ export default function App() {
         />
       )}
 
-      {/* Dynamic Desktop Sidebar Panel */}
-      {/* Dynamic Desktop Sidebar Panel (White theme with blue accents) */}
+      {/* Modern Desktop & Mobile Sidebar Panel */}
       <aside className={`
-        fixed inset-y-0 left-0 w-64 bg-white text-slate-700 border-r border-slate-200 flex flex-col shrink-0 z-50 transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen shadow-lg lg:shadow-none
+        fixed inset-y-0 left-0 w-68 bg-white/95 backdrop-blur-md text-slate-700 border-r border-slate-200/80 flex flex-col shrink-0 z-50 transition-all duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen shadow-xl lg:shadow-none
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Header Branding */}
-        <div className="p-6 mb-2 flex items-center justify-between border-b border-slate-100">
+        <div className="p-5 mb-1 flex items-center justify-between border-b border-slate-100/90">
           <div className="flex items-center gap-3 min-w-0">
             {activeBusiness.logoUrl ? (
               <img 
                 src={activeBusiness.logoUrl} 
                 alt={activeBusiness.name} 
-                className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white shadow-xs"
+                className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white shadow-2xs shrink-0"
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-10 h-10 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-xl flex items-center justify-center shadow-xs text-white font-extrabold text-xl shrink-0">
+              <div className="w-10 h-10 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-xl flex items-center justify-center shadow-xs text-white font-black text-lg shrink-0">
                 {activeBusiness.name.charAt(0)}
               </div>
             )}
             <div className="min-w-0">
-              <h1 className="font-bold text-slate-900 text-base tracking-tight leading-none truncate">{activeBusiness.name}</h1>
-              <span className="text-[10px] text-emerald-700 font-bold tracking-widest uppercase mt-1 inline-block">BusinessOS</span>
+              <h1 className="font-extrabold text-slate-900 text-sm tracking-tight leading-snug truncate" title={activeBusiness.name}>
+                {activeBusiness.name}
+              </h1>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[10px] text-emerald-700 font-extrabold tracking-wider uppercase truncate">
+                  {activeBusiness.category || 'BusinessOS'}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1494,12 +1523,17 @@ export default function App() {
         </div>
 
         {/* Sidebar Nav */}
-        <div className="flex-1 px-4 space-y-1 overflow-y-auto">
+        <div className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
+          <div className="px-3 py-1.5 text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
+            Menu Navigation
+          </div>
           {SIDEBAR_ITEMS.map(item => {
             const isAuthorized = authorizedTabs.includes(item.name);
             if (!isAuthorized) return null;
 
             const IconComp = item.icon;
+            const isActive = activeTab === item.name;
+
             return (
               <button
                 key={item.name}
@@ -1507,46 +1541,58 @@ export default function App() {
                   setActiveTab(item.name);
                   setIsMobileMenuOpen(false);
                 }}
-                className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 text-sm font-medium transition-colors cursor-pointer ${
-                  activeTab === item.name 
-                    ? 'bg-emerald-600 text-white rounded-xl shadow-xs font-semibold' 
-                    : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-800 rounded-xl transition-colors'
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl flex items-center justify-between text-xs font-semibold transition-all duration-150 cursor-pointer group ${
+                  isActive 
+                    ? 'bg-emerald-50 text-emerald-900 font-bold border border-emerald-200/80 shadow-2xs' 
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                 }`}
               >
-                <IconComp className="h-5 w-5 text-current" />
-                <span>{item.name}</span>
+                <div className="flex items-center gap-3 min-w-0">
+                  <IconComp className={`h-4 w-4 shrink-0 transition-colors ${
+                    isActive ? 'text-emerald-700' : 'text-slate-400 group-hover:text-slate-600'
+                  }`} />
+                  <span className="truncate">{item.name}</span>
+                </div>
+                {isActive && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                )}
               </button>
             );
           })}
         </div>
 
         {/* Bottom session user profile and Tenant ID details */}
-        <div className="p-5 mt-auto space-y-3 border-t border-slate-100">
+        <div className="p-4 mt-auto space-y-2.5 border-t border-slate-100 bg-white">
           {isAdmin && (
             <button
               onClick={() => {
                 setAdminActiveBusiness(null);
                 setActiveTab('Dashboard');
               }}
-              className="w-full text-left px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl flex items-center gap-3 text-xs font-bold transition-colors border border-emerald-200 shadow-xs cursor-pointer"
+              className="w-full text-left px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl flex items-center gap-2.5 text-xs font-bold transition-colors border border-emerald-200/80 shadow-2xs cursor-pointer"
             >
               <Shield className="h-4 w-4 text-emerald-600" />
-              <span>Admin Panel</span>
+              <span>Super Admin Console</span>
             </button>
           )}
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-            <div className="text-[10px] uppercase tracking-widest text-emerald-700 font-bold mb-1">Tenant ID</div>
-            <div className="text-xs text-slate-800 font-mono font-semibold truncate">BOS-{activeBusiness.id.slice(2).toUpperCase()}</div>
-            <div className="pt-1">
-              <InstallAppButton variant="sidebar" />
-            </div>
+          {/* Install App Button */}
+          <div className="pt-0.5">
+            <InstallAppButton variant="sidebar" />
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs border border-slate-200">
-            <div className="truncate pr-2">
-              <p className="font-semibold text-slate-900 truncate leading-snug">{currentUser.name}</p>
-              <span className="text-[9px] text-emerald-700 font-bold uppercase block mt-0.5">{currentUser.role}</span>
+          {/* Staff Session Profile */}
+          <div className="p-2.5 bg-slate-50 rounded-xl flex items-center justify-between text-xs border border-slate-200/80">
+            <div className="flex items-center gap-2.5 min-w-0 pr-1">
+              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-xs shrink-0 uppercase border border-emerald-200">
+                {currentUser.name.charAt(0)}
+              </div>
+              <div className="truncate min-w-0">
+                <p className="font-bold text-slate-900 truncate text-xs leading-tight">{currentUser.name}</p>
+                <span className="text-[9px] text-emerald-700 font-extrabold uppercase tracking-wide block">
+                  {currentUser.role}
+                </span>
+              </div>
             </div>
             <button
               onClick={handleLogout}
@@ -1741,10 +1787,12 @@ export default function App() {
           })()}
 
           {activeTab === 'Dashboard' && (
-            isBeautyCosmetics ? (
-              <BeautyCosmeticsDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
+            <>
+              {/* Visual Urgent Inventory Notification Component */}
+              <DashboardInventoryAlert 
+                products={lowStockProducts}
+                business={activeBusiness}
+                user={currentUser}
                 onNavigate={(tab) => {
                   if (authorizedTabs.includes(tab)) {
                     setActiveTab(tab);
@@ -1752,104 +1800,120 @@ export default function App() {
                     showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
                   }
                 }}
+                onStockAdjust={handleStockAdjust}
+                onThresholdAdjust={handleThresholdAdjust}
               />
-            ) : isTravel ? (
-              <TravelDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isSalon ? (
-              <SalonDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isLaundry ? (
-              <LaundryDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isFastFood ? (
-              <FastFoodDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isRestaurant ? (
-              <RestaurantDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isPharmacy ? (
-              <PharmacyDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : isServiceBusiness ? (
-              <ServiceBusinessDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            ) : (
-              <BusinessDashboard 
-                business={activeBusiness} 
-                user={currentUser} 
-                onNavigate={(tab) => {
-                  if (authorizedTabs.includes(tab)) {
-                    setActiveTab(tab);
-                  } else {
-                    showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
-                  }
-                }}
-              />
-            )
+
+              {isBeautyCosmetics ? (
+                <BeautyCosmeticsDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isTravel ? (
+                <TravelDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isSalon ? (
+                <SalonDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isLaundry ? (
+                <LaundryDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isFastFood ? (
+                <FastFoodDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isRestaurant ? (
+                <RestaurantDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isPharmacy ? (
+                <PharmacyDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : isServiceBusiness ? (
+                <ServiceBusinessDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              ) : (
+                <BusinessDashboard 
+                  business={activeBusiness} 
+                  user={currentUser} 
+                  onNavigate={(tab) => {
+                    if (authorizedTabs.includes(tab)) {
+                      setActiveTab(tab);
+                    } else {
+                      showError('Access Restricted', `"${tab}" is either not permitted for your role or disabled in Features.`);
+                    }
+                  }}
+                />
+              )}
+            </>
           )}
 
           {activeTab === 'Travel Customers' && <TravelCustomers business={activeBusiness} />}

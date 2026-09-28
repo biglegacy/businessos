@@ -61,7 +61,7 @@ export function SchoolPortal({ business, currentUser, onNavigate, activeTab: ext
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    setTimeout(() => setToastMessage(null), 2000);
   };
 
   // Sync external tab if provided

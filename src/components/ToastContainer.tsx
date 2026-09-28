@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Check, AlertTriangle } from 'lucide-react';
+import { X, Check, AlertTriangle, Info } from 'lucide-react';
 import { ToastOptions } from '../lib/toast';
 
 interface ToastItem extends ToastOptions {
@@ -14,12 +14,22 @@ export const ToastContainer: React.FC = () => {
     const handleToastEvent = (e: Event) => {
       const customEvent = e as CustomEvent<ToastOptions>;
       if (customEvent.detail) {
-        const id = Math.random().toString(36).substring(2, 9);
-        const newToast: ToastItem = {
-          ...customEvent.detail,
-          id,
-        };
-        setToasts((prev) => [...prev, newToast]);
+        const detail = customEvent.detail;
+        setToasts((prev) => {
+          // Avoid duplicate notifications for the same action
+          const isDuplicate = prev.some(
+            t => t.title === detail.title && t.message === detail.message && t.type === detail.type
+          );
+          if (isDuplicate) return prev;
+
+          const id = Math.random().toString(36).substring(2, 9);
+          const newToast: ToastItem = {
+            ...detail,
+            duration: 2000, // Strictly 2 seconds visibility
+            id,
+          };
+          return [...prev, newToast];
+        });
       }
     };
 
@@ -50,7 +60,7 @@ interface ToastCardProps {
 }
 
 const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
-  const { type, title, message, duration = 4000 } = toast;
+  const { type, title, message, duration = 2000 } = toast;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -60,6 +70,9 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
   }, [duration, onDismiss]);
 
   const isSuccess = type === 'success';
+  const isWarning = type === 'warning';
+  const isInfo = type === 'info';
+  const isError = type === 'error' || (!isSuccess && !isWarning && !isInfo);
 
   // SVG Paths for drawing animation
   const checkmarkPathVariants = {
@@ -67,7 +80,7 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
     visible: {
       pathLength: 1,
       opacity: 1,
-      transition: { duration: 0.4, ease: 'easeOut', delay: 0.1 }
+      transition: { duration: 0.3, ease: 'easeOut', delay: 0.05 }
     }
   };
 
@@ -76,7 +89,7 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
     visible: {
       pathLength: 1,
       opacity: 1,
-      transition: { duration: 0.3, ease: 'easeOut', delay: 0.1 }
+      transition: { duration: 0.25, ease: 'easeOut', delay: 0.05 }
     }
   };
 
@@ -85,24 +98,27 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
     visible: {
       pathLength: 1,
       opacity: 1,
-      transition: { duration: 0.3, ease: 'easeOut', delay: 0.25 }
+      transition: { duration: 0.25, ease: 'easeOut', delay: 0.15 }
     }
   };
 
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: -20, scale: 0.9 }}
+      initial={{ opacity: 0, y: -20, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.85, transition: { duration: 0.2 } }}
+      exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
       className={`pointer-events-auto w-full bg-white rounded-2xl shadow-xl border overflow-hidden ${
-        isSuccess ? 'border-emerald-100 shadow-emerald-500/5' : 'border-rose-100 shadow-rose-500/5'
+        isSuccess ? 'border-emerald-100 shadow-emerald-500/5' :
+        isWarning ? 'border-amber-100 shadow-amber-500/5' :
+        isInfo ? 'border-sky-100 shadow-sky-500/5' :
+        'border-rose-100 shadow-rose-500/5'
       }`}
     >
       <div className="p-4 flex gap-3.5 relative">
         {/* Animated Icon Container */}
         <div className="shrink-0 pt-0.5">
-          {isSuccess ? (
+          {isSuccess && (
             <div className="h-10 w-10 rounded-xl bg-emerald-50 border border-emerald-100/50 flex items-center justify-center">
               <svg className="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                 <motion.path
@@ -115,7 +131,18 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
                 />
               </svg>
             </div>
-          ) : (
+          )}
+          {isWarning && (
+            <div className="h-10 w-10 rounded-xl bg-amber-50 border border-amber-100/50 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            </div>
+          )}
+          {isInfo && (
+            <div className="h-10 w-10 rounded-xl bg-sky-50 border border-sky-100/50 flex items-center justify-center">
+              <Info className="w-5 h-5 text-sky-600" />
+            </div>
+          )}
+          {isError && (
             <div className="h-10 w-10 rounded-xl bg-rose-50 border border-rose-100/50 flex items-center justify-center">
               <svg className="w-5 h-5 text-rose-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                 <motion.path
@@ -141,7 +168,12 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
 
         {/* Content */}
         <div className="flex-1 min-w-0 pr-4">
-          <h4 className={`text-xs font-bold leading-tight ${isSuccess ? 'text-emerald-950' : 'text-rose-950'}`}>
+          <h4 className={`text-xs font-bold leading-tight ${
+            isSuccess ? 'text-emerald-950' :
+            isWarning ? 'text-amber-950' :
+            isInfo ? 'text-sky-950' :
+            'text-rose-950'
+          }`}>
             {title}
           </h4>
           <p className="text-[11px] text-slate-500 font-medium leading-relaxed mt-1 whitespace-pre-line">
@@ -158,13 +190,18 @@ const ToastCard: React.FC<ToastCardProps> = ({ toast, onDismiss }) => {
         </button>
       </div>
 
-      {/* Animated progress bar tracking the exact remaining duration */}
+      {/* Animated progress bar tracking the exact 2-second remaining duration */}
       <div className="w-full h-1 bg-slate-50 relative">
         <motion.div
           initial={{ width: '100%' }}
           animate={{ width: '0%' }}
-          transition={{ duration: duration / 1000, ease: 'linear' }}
-          className={`h-full ${isSuccess ? 'bg-emerald-500' : 'bg-rose-500'}`}
+          transition={{ duration: 2, ease: 'linear' }}
+          className={`h-full ${
+            isSuccess ? 'bg-emerald-500' :
+            isWarning ? 'bg-amber-500' :
+            isInfo ? 'bg-sky-500' :
+            'bg-rose-500'
+          }`}
         />
       </div>
     </motion.div>

@@ -145,19 +145,6 @@ export const RestaurantDashboard: React.FC<RestaurantDashboardProps> = ({ busine
 
   return (
     <div className="space-y-8">
-      {/* Upper header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-        <div>
-          <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider block">Restaurant Operations</span>
-          <h2 className="text-2xl font-black text-slate-800 mt-1">Restaurant Management Suite</h2>
-          <p className="text-xs text-slate-500 mt-1">Real-time overview of recipes, menu velocity, tables, and live order preparation queues.</p>
-        </div>
-        <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl border border-emerald-100 text-xs font-bold">
-          <Utensils className="h-4 w-4" />
-          <span>Restaurant Mode Enabled</span>
-        </div>
-      </div>
-
       {/* Quick Action Pathways */}
       <QuickActionPathways business={business} onNavigate={onNavigate} />
 

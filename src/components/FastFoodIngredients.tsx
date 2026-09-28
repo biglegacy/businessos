@@ -287,6 +287,7 @@ export const FastFoodIngredients: React.FC<FastFoodIngredientsProps> = ({ busine
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs cursor-pointer"
                   >
                     <option value="pcs">pcs (Pieces)</option>
+                    <option value="Bag">Bag (Bags / Sacks)</option>
                     <option value="kg">kg (Kilograms)</option>
                     <option value="g">g (Grams)</option>
                     <option value="L">L (Liters)</option>

@@ -17,14 +17,22 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Accurate standalone check (never falsely permanently locked by localStorage)
+  // Accurate standalone & installation check
   const [isInstalled, setIsInstalled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return (
+    const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       window.matchMedia('(display-mode: minimal-ui)').matches ||
-      (navigator as any).standalone === true
-    );
+      window.matchMedia('(display-mode: window-controls-overlay)').matches ||
+      (navigator as any).standalone === true ||
+      document.referrer.includes('android-app://');
+
+    let isMarkedInstalled = false;
+    try {
+      isMarkedInstalled = localStorage.getItem('pwa_installed') === 'true';
+    } catch (e) {}
+
+    return isStandalone || isMarkedInstalled;
   });
 
   // Check browser & iOS capabilities
@@ -46,6 +54,18 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
       // Store event for custom button trigger
       setDeferredPrompt(e);
       (window as any).deferredPrompt = e;
+
+      // If browser fires beforeinstallprompt in non-standalone browser tab, reset flag
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: minimal-ui)').matches ||
+        (navigator as any).standalone === true;
+      if (!isStandalone) {
+        setIsInstalled(false);
+        try {
+          localStorage.removeItem('pwa_installed');
+        } catch (e) {}
+      }
     };
 
     const handleAppInstalled = () => {
@@ -53,6 +73,9 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
       setIsInstalling(false);
       setDeferredPrompt(null);
       (window as any).deferredPrompt = null;
+      try {
+        localStorage.setItem('pwa_installed', 'true');
+      } catch (e) {}
     };
 
     const handlePwaInstallable = () => {
@@ -137,37 +160,9 @@ export function InstallAppButton({ className = '', variant = 'primary' }: Instal
     } catch (e) {}
   };
 
-  // State: App is currently running in standalone PWA mode
+  // State: App is already installed using PWA — hide the install app button completely
   if (isInstalled) {
-    if (variant === 'sidebar') {
-      return (
-        <div id="pwa-status-installed" className={`p-2.5 bg-emerald-950/60 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-emerald-300 text-xs font-bold ${className}`}>
-          <div className="h-5 w-5 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
-            <Check className="h-3 w-3" />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-emerald-400 font-extrabold uppercase tracking-wider">PWA Mode</span>
-            <span className="text-[11px] text-white">Standalone Active</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (variant === 'badge') {
-      return (
-        <span className={`inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold ${className}`}>
-          <Check className="h-3 w-3 text-emerald-600" />
-          <span>Installed</span>
-        </span>
-      );
-    }
-
-    return (
-      <div id="pwa-status-installed" className={`inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold ${className}`}>
-        <Check className="h-4 w-4 text-emerald-600" />
-        <span>App Installed</span>
-      </div>
-    );
+    return null;
   }
 
   // State: Currently installing

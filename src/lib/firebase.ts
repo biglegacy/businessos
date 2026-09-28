@@ -1,5 +1,19 @@
-import { initializeApp, getApps, getApp, setLogLevel } from 'firebase/app';
-import { initializeFirestore, doc, setDoc, deleteDoc, collection, onSnapshot, query, where, getDocs, getDocFromServer, getDoc, writeBatch } from 'firebase/firestore';
+import { initializeApp, getApps, getApp, setLogLevel as setAppLogLevel } from 'firebase/app';
+import {
+  initializeFirestore,
+  setLogLevel as setFirestoreLogLevel,
+  doc,
+  setDoc,
+  deleteDoc,
+  collection,
+  onSnapshot,
+  query,
+  where,
+  getDocs,
+  getDocFromServer,
+  getDoc,
+  writeBatch
+} from 'firebase/firestore';
 import {
   initializeAuth,
   indexedDBLocalPersistence,
@@ -8,10 +22,25 @@ import {
   getAuth
 } from 'firebase/auth';
 import { getStorage, ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { setUserLogHandler, setLogLevel as setLoggerLogLevel } from '@firebase/logger';
 import config from '../../firebase-applet-config.json';
 
-// Suppress internal non-fatal connection status warnings from Firebase SDK
-setLogLevel('silent');
+// Suppress internal connection notices and idle stream disconnections from Firebase SDK
+try {
+  setAppLogLevel('silent');
+  setFirestoreLogLevel('silent');
+  setLoggerLogLevel('silent');
+  setUserLogHandler((logEntry: any) => {
+    const msg = String(logEntry?.message || '');
+    if (
+      msg.includes('Disconnecting idle stream') ||
+      msg.includes('Timed out waiting for new targets') ||
+      msg.includes('CANCELLED')
+    ) {
+      return; // Silently drop idle stream connection pool events
+    }
+  });
+} catch (e) {}
 
 const metaEnv = (import.meta as any)?.env || {};
 
@@ -27,10 +56,10 @@ const firebaseConfig = {
 // Initialize Firebase App
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore with auto-detect long polling for optimal connection handling in proxied environments
+// Initialize Firestore with reliable HTTP long polling to eliminate idle gRPC stream dropouts
 const databaseId = metaEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID || config.firestoreDatabaseId || '(default)';
 export const firestore = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 }, databaseId);
 
 // Test connection to Firestore as per skill guidelines

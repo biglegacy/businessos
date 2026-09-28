@@ -1,5 +1,3 @@
-import defaultDb from '../../cloud_db.json';
-
 export interface WorkerEnv {
   PAYSTACK_PUBLIC_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
@@ -18,24 +16,27 @@ async function readJsonBody(request: Request): Promise<any> {
   }
 }
 
-// Helper for JSON responses
+// Helper for JSON responses with standard security headers
 function jsonResponse(data: any, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
       ...extraHeaders,
     },
   });
 }
 
-// Helper to resolve Paystack credentials
+// Helper to resolve Paystack credentials safely from environment
+const defaultDb: Record<string, any[]> = {};
+
 function getPaystackSettings(env: WorkerEnv) {
-  const list = (defaultDb as any)?.bos_paystack_settings || [];
-  const dbSetting = Array.isArray(list) && list.length > 0 ? list[0] : {};
-  const publicKey = env.PAYSTACK_PUBLIC_KEY || dbSetting.publicKey || 'pk_test_paystack_default_public_key';
-  const secretKey = env.PAYSTACK_SECRET_KEY || dbSetting.secretKey || 'sk_test_paystack_default_secret_key';
-  const currency = env.DEFAULT_CURRENCY || dbSetting.currency || 'GHS';
+  const publicKey = env.PAYSTACK_PUBLIC_KEY || '';
+  const secretKey = env.PAYSTACK_SECRET_KEY || '';
+  const currency = env.DEFAULT_CURRENCY || 'GHS';
   return { publicKey, secretKey, currency };
 }
 
@@ -169,11 +170,9 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
 
       if (verifyRes.ok && verifyResponseData?.status && verifyResponseData?.data?.status === 'success') {
         isVerified = true;
-      } else if (secretKey.startsWith('sk_test') || verifyResponseData?.status === true) {
-        isVerified = true;
       }
     } catch {
-      isVerified = true;
+      isVerified = false;
     }
 
     if (isVerified) {
@@ -197,9 +196,10 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
     }
   }
 
-  // 5. Paystack Callback
+  // 5. Paystack Callback (Sanitized against XSS and postMessage injection)
   if (path === '/api/payment/callback') {
-    const trxref = url.searchParams.get('trxref') || url.searchParams.get('reference') || '';
+    const rawRef = url.searchParams.get('trxref') || url.searchParams.get('reference') || '';
+    const safeRef = rawRef.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'N/A';
     const html = `<!DOCTYPE html>
 <html>
   <head>
@@ -208,11 +208,11 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
   </head>
   <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 48px; background: #0f172a; color: #f8fafc;">
     <h2 style="color: #10b981;">Payment Processed</h2>
-    <p>Reference: ${trxref || 'N/A'}</p>
+    <p>Reference: ${safeRef}</p>
     <p>Your subscription has been recorded. Returning to application...</p>
     <script>
       if (window.opener) {
-        window.opener.postMessage({ type: 'PAYSTACK_PAYMENT_SUCCESS', reference: '${trxref}' }, '*');
+        window.opener.postMessage({ type: 'PAYSTACK_PAYMENT_SUCCESS', reference: ${JSON.stringify(safeRef)} }, window.location.origin);
       }
       setTimeout(function() { window.close(); }, 2000);
     </script>
@@ -220,7 +220,11 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
 </html>`;
     return new Response(html, {
       status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN'
+      }
     });
   }
 
@@ -265,14 +269,26 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
     });
   }
 
-  // 10. File Upload
+  // 10. File Upload (Validated MIME type and size limit)
   if (path === '/api/upload' && method === 'POST') {
     const body = await readJsonBody(request);
-    if (!body.base64) {
+    if (!body.base64 || typeof body.base64 !== 'string') {
       return jsonResponse({ error: 'No file data received' }, 400);
     }
-    // Return data URL directly for serverless durability without local disk requirements
-    return jsonResponse({ url: body.base64 });
+    const matches = body.base64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+      return jsonResponse({ error: 'Invalid base64 string format' }, 400);
+    }
+    const mimeType = matches[1].toLowerCase();
+    const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'application/pdf'];
+    if (!allowed.includes(mimeType)) {
+      return jsonResponse({ error: 'Forbidden file type. Permitted: PNG, JPEG, WEBP, PDF' }, 400);
+    }
+    if (matches[2].length * 0.75 > 5 * 1024 * 1024) {
+      return jsonResponse({ error: 'File size exceeds maximum permitted limit (5MB)' }, 400);
+    }
+    // Return sanitized data URL directly for serverless durability without local disk requirements
+    return jsonResponse({ success: true, url: body.base64 });
   }
 
   return jsonResponse({ error: 'API route not found', path }, 404);

@@ -157,46 +157,6 @@ export const PharmacyDashboard: React.FC<PharmacyDashboardProps> = ({
         </div>
       )}
 
-      {/* Top Banner & Quick Dispensary Actions */}
-      <div className="bg-gradient-to-r from-emerald-800 to-teal-900 text-white p-6 rounded-3xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-white/10 rounded-full text-xs font-semibold tracking-wide text-emerald-200">
-            <Pill className="h-3.5 w-3.5" />
-            <span>Pharmacy Dispensary Operating System</span>
-          </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">
-            {business.name} Dispensary
-          </h2>
-          <p className="text-xs text-emerald-200/90 max-w-xl">
-            FEFO-enabled batch management, prescription dispensation tracking, and automated expiry defense adhering to healthcare compliance standards.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            onClick={() => onNavigate('POS')}
-            className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 transition cursor-pointer shadow-md"
-          >
-            <ShoppingCart className="h-4 w-4" />
-            <span>Open Dispensary POS</span>
-          </button>
-          <button
-            onClick={() => onNavigate('Prescriptions')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-white/10"
-          >
-            <FileText className="h-4 w-4" />
-            <span>Record Prescription ({pendingPrescriptions.length})</span>
-          </button>
-          <button
-            onClick={() => onNavigate('Medicines & Products')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-white/10"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add Medicine</span>
-          </button>
-        </div>
-      </div>
-
       {/* KPI Grid (11 Required Pharmacy Metrics) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         {/* Today's Sales */}

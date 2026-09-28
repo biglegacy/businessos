@@ -111,39 +111,6 @@ export const BeautyCosmeticsDashboard: React.FC<BeautyCosmeticsDashboardProps> =
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Hero Welcome Banner */}
-      <div className="bg-gradient-to-r from-rose-900 via-pink-900 to-indigo-950 text-white p-6 rounded-3xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-white/10 rounded-full text-xs font-semibold tracking-wide text-rose-200">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>Beauty & Cosmetics Management Studio</span>
-          </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">
-            {business.name} Beauty Counter
-          </h2>
-          <p className="text-xs text-rose-200/90 max-w-xl">
-            Streamline shade matching, fragrance lines, skincare inventory, batch expirations, and sales terminal operations.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            onClick={() => onNavigate('POS')}
-            className="px-4 py-2.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs flex items-center gap-2 transition cursor-pointer shadow-md"
-          >
-            <ShoppingCart className="h-4 w-4" />
-            <span>Beauty Counter POS</span>
-          </button>
-          <button
-            onClick={() => onNavigate('Products')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-white/10"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add Beauty Item</span>
-          </button>
-        </div>
-      </div>
-
       {/* KPI Grid (12 Metrics) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         {/* Today's Sales */}

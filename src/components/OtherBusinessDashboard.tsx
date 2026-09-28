@@ -7,7 +7,6 @@ import React from 'react';
 import { db, formatCurrency } from '../lib/db';
 import { Business, User } from '../types';
 import {
-  LayoutDashboard,
   DollarSign,
   ShoppingCart,
   Package,
@@ -56,39 +55,6 @@ export const OtherBusinessDashboard: React.FC<OtherBusinessDashboardProps> = ({
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-6 rounded-3xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-white/10 rounded-full text-xs font-semibold tracking-wide text-slate-300">
-            <LayoutDashboard className="h-3.5 w-3.5" />
-            <span>Universal Enterprise Operating System</span>
-          </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">
-            {business.name}
-          </h2>
-          <p className="text-xs text-slate-300/90 max-w-xl">
-            Custom enterprise workspace configured for {business.category || 'Specialized Enterprise'} &bull; Unified POS, inventory catalog, service bookings, and financial ledger.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            onClick={() => onNavigate('POS')}
-            className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 transition cursor-pointer shadow-md"
-          >
-            <ShoppingCart className="h-4 w-4" />
-            <span>Open POS Counter</span>
-          </button>
-          <button
-            onClick={() => onNavigate('Products')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-white/10"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add Item / Product</span>
-          </button>
-        </div>
-      </div>
-
       {/* KPI Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-2">

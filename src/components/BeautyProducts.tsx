@@ -498,6 +498,18 @@ export const BeautyProducts: React.FC<BeautyProductsProps> = ({
                 </div>
 
                 <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Low Stock Threshold</label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="5"
+                    value={lowStockThreshold}
+                    onChange={e => setLowStockThreshold(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">Expiry Date (Skincare/Perfume)</label>
                   <input
                     type="date"

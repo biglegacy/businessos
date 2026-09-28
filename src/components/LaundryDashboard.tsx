@@ -70,49 +70,6 @@ export const LaundryDashboard: React.FC<LaundryDashboardProps> = ({
 
   return (
     <div className="space-y-8 pb-12 font-sans">
-      {/* Header Hero Banner */}
-      <div className="bg-gradient-to-r from-cyan-900 via-blue-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 bottom-0 opacity-10 pointer-events-none flex items-center pr-8">
-          <Shirt className="w-96 h-96 text-white" />
-        </div>
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-cyan-500/20 border border-cyan-400/30 rounded-full text-cyan-200 text-xs font-bold uppercase tracking-wider">
-              <Sparkles className="h-3.5 w-3.5 text-cyan-300" /> Laundry & Dry Cleaning Hub
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {business.name}
-            </h1>
-            <p className="text-xs sm:text-sm text-cyan-200/80 font-medium">
-              Track garment intake, service price lists, washing stages, pickup readiness, and payments.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => setActiveTab(activeTab === 'overview' ? 'price_list' : 'overview')}
-              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-2xl text-xs backdrop-blur-sm transition flex items-center gap-2 cursor-pointer border border-white/20"
-            >
-              <Tag className="h-4 w-4 text-cyan-300" />
-              {activeTab === 'overview' ? 'Manage Price List' : 'View Dashboard Overview'}
-            </button>
-            <button
-              onClick={() => onNavigate('Laundry Orders')}
-              className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black rounded-2xl text-xs shadow-lg transition flex items-center gap-2 cursor-pointer"
-            >
-              <Shirt className="h-4 w-4" /> Manage Laundry Orders
-            </button>
-            <button
-              onClick={() => onNavigate('POS')}
-              className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl text-xs shadow-lg transition flex items-center gap-2 cursor-pointer"
-            >
-              <DollarSign className="h-4 w-4" /> Open Express POS
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Navigation Tabs Bar */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
         <button

@@ -15,7 +15,7 @@ import {
   MessageSquare, MessageSquareOff, Send, Smartphone, ShieldCheck, DollarSign, Sparkles,
   Clock, Calendar, Layers, ExternalLink, Filter, CheckCircle, Mail, Phone, GitBranch,
   LayoutGrid, Table as TableIcon, ChevronDown, ChevronUp, ArrowDown, CheckSquare, Square,
-  Radio
+  Radio, Cloud
 } from 'lucide-react';
 import { hashPassword } from './AuthPortal';
 import { AdminFeatureChangeLog } from '../types';
@@ -43,20 +43,32 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [trigger, setTrigger] = useState(0);
   const forceUpdate = () => setTrigger(prev => prev + 1);
 
-  // Real-time listener and reactive Firestore businesses state
+  // Real-time listener and reactive authoritative businesses state
   const [firestoreBusinesses, setFirestoreBusinesses] = useState<Business[]>(() => db.getBusinesses());
+  const [isLoadingBusinesses, setIsLoadingBusinesses] = useState(false);
 
   useEffect(() => {
-    // Initial fetch directly from Firestore to ensure real database state
-    db.fetchBusinessesFromFirestore().then(items => {
-      setFirestoreBusinesses(items);
-    }).catch(() => {});
+    let isMounted = true;
+    setIsLoadingBusinesses(true);
+    db.loadAuthoritativeBusinesses().then(items => {
+      if (isMounted) {
+        setFirestoreBusinesses(items);
+        setIsLoadingBusinesses(false);
+      }
+    }).catch(() => {
+      if (isMounted) setIsLoadingBusinesses(false);
+    });
 
     const unsubscribe = db.subscribe(() => {
-      setFirestoreBusinesses(db.getBusinesses());
-      forceUpdate();
+      if (isMounted) {
+        setFirestoreBusinesses(db.getBusinesses());
+        forceUpdate();
+      }
     });
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   // --- Paystack Settings State ---
@@ -79,7 +91,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     totalSentCount: number;
   }>({
     provider: 'Arkesel',
-    senderId: 'Legacy Inc',
+    senderId: 'Shop',
     apiEndpoint: 'https://sms.arkesel.com/sms/api?action=send-sms',
     isEnabled: true,
     hasApiKey: false,
@@ -91,7 +103,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   });
 
   const [smsApiKeyInput, setSmsApiKeyInput] = useState('');
-  const [smsSenderIdInput, setSmsSenderIdInput] = useState('Legacy Inc');
+  const [smsSenderIdInput, setSmsSenderIdInput] = useState('Shop');
   const [smsEndpointInput, setSmsEndpointInput] = useState('https://sms.arkesel.com/sms/api?action=send-sms');
   const [smsIsEnabled, setSmsIsEnabled] = useState(true);
   const [showSmsApiKey, setShowSmsApiKey] = useState(false);
@@ -184,7 +196,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setPricingMessage({ type: 'error', text: err.message || 'Network error updating price.' });
     } finally {
       setIsSavingPrice(false);
-      setTimeout(() => setPricingMessage(null), 5000);
+      setTimeout(() => setPricingMessage(null), 2000);
     }
   };
 
@@ -255,7 +267,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         text: `Successfully ${enable ? 'ENABLED' : 'DISABLED'} SMS for all ${count} selected business${count === 1 ? '' : 'es'}. Status updated in database.`
       });
       setSelectedBusinessIds([]);
-      setTimeout(() => setBulkSmsFeedback(null), 6000);
+      setTimeout(() => setBulkSmsFeedback(null), 2000);
     } catch (e: any) {
       console.error('Error in bulk SMS toggle:', e);
       setBulkSmsFeedback({
@@ -288,7 +300,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         text: `Successfully deleted ${res.deletedCount} business${res.deletedCount === 1 ? '' : 'es'} from the database.`
       });
       forceUpdate();
-      setTimeout(() => setBulkSmsFeedback(null), 6000);
+      setTimeout(() => setBulkSmsFeedback(null), 2000);
     } catch (err: any) {
       console.error('Bulk deletion error:', err);
       // Revert if error
@@ -327,7 +339,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         type: 'success',
         text: `Successfully ${enable ? 'ENABLED' : 'DISABLED'} SMS for all ${res.updatedCount} registered businesses.`
       });
-      setTimeout(() => setBulkSmsFeedback(null), 6000);
+      setTimeout(() => setBulkSmsFeedback(null), 2000);
     } catch (err: any) {
       console.error('Global SMS toggle error:', err);
       setBulkSmsFeedback({
@@ -425,7 +437,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setPopupMessage({ type: 'error', text: err.message || 'Network error saving popup.' });
     } finally {
       setIsSavingPopup(false);
-      setTimeout(() => setPopupMessage(null), 5000);
+      setTimeout(() => setPopupMessage(null), 2000);
     }
   };
 
@@ -442,7 +454,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     } catch (err: any) {
       setPopupMessage({ type: 'error', text: err.message || 'Error deleting popup.' });
     }
-    setTimeout(() => setPopupMessage(null), 4000);
+    setTimeout(() => setPopupMessage(null), 2000);
   };
 
   const handleTogglePopupStatus = async (prompt: BusinessPopupPrompt) => {
@@ -477,7 +489,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       const data = await db.getSmsSettings();
       if (data) {
         setSmsConfig(data);
-        setSmsSenderIdInput(data.senderId || 'Legacy Inc');
+        setSmsSenderIdInput((data.senderId && !data.senderId.toLowerCase().includes('legacy')) ? data.senderId : 'Shop');
         setSmsEndpointInput(data.apiEndpoint || 'https://sms.arkesel.com/sms/api?action=send-sms');
         setSmsIsEnabled(data.isEnabled !== undefined ? data.isEnabled : true);
         if (data.maskedApiKey) {
@@ -522,7 +534,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setSmsSaveMessage({ type: 'error', text: 'Failed to save Arkesel API settings. Please try again.' });
     } finally {
       setSmsSaving(false);
-      setTimeout(() => setSmsSaveMessage(null), 6000);
+      setTimeout(() => setSmsSaveMessage(null), 2000);
     }
   };
 
@@ -553,7 +565,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         type: 'success',
         text: res.isEnabled ? '✓ Arkesel SMS service enabled globally.' : '✓ Arkesel SMS service disabled globally.'
       });
-      setTimeout(() => setSmsSaveMessage(null), 5000);
+      setTimeout(() => setSmsSaveMessage(null), 2000);
     } catch (e) {
       console.warn('Error toggling global SMS:', e);
     }
@@ -681,7 +693,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setStatusSyncMessage('Failed to sync statuses: ' + (err.message || 'Network error'));
     } finally {
       setIsSyncingStatuses(false);
-      setTimeout(() => setStatusSyncMessage(null), 5000);
+      setTimeout(() => setStatusSyncMessage(null), 2000);
     }
   };
 
@@ -694,7 +706,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         mtnNumber: mtnDiagnosticNumber.trim() || undefined,
         telecelNumber: telecelDiagnosticNumber.trim() || undefined,
         airtelTigoNumber: airtelTigoDiagnosticNumber.trim() || undefined,
-        senderId: smsConfig.senderId || 'Legacy Inc'
+        senderId: (smsConfig.senderId && !smsConfig.senderId.toLowerCase().includes('legacy')) ? smsConfig.senderId : 'Shop'
       });
       setDiagnosticResult(res);
       const updatedLogs = await db.getSmsLogs();
@@ -760,6 +772,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   // --- Modals / Selection states ---
   const [viewingBusiness, setViewingBusiness] = useState<Business | null>(null);
   const [editingBusiness, setEditingBusiness] = useState<Business | null>(null);
+  const [isSavingBusiness, setIsSavingBusiness] = useState(false);
+  const [saveBusinessSuccess, setSaveBusinessSuccess] = useState<string | null>(null);
   const [registeringBusiness, setRegisteringBusiness] = useState(false);
   const [creatingUser, setCreatingUser] = useState<boolean>(false);
   const [resettingUserPass, setResettingUserPass] = useState<User | null>(null);
@@ -808,7 +822,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [busStockTransferEnabled, setBusStockTransferEnabled] = useState(false);
   const [busCurrency, setBusCurrency] = useState('GHC');
   const [busSubscriptionAmount, setBusSubscriptionAmount] = useState('299');
-  const [regBusPassword, setRegBusPassword] = useState('123456');
+  const [regBusPassword, setRegBusPassword] = useState('');
 
   // --- Form States for User Creation / Password Reset ---
   const [newUserBusId, setNewUserBusId] = useState('');
@@ -904,10 +918,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setPayNowState(updated);
 
     try {
-      await fetch('/api/db/save', {
+      await fetch('/api/admin/paystack-settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'bos_paystack_settings', data: [updated] })
+        headers: { 'Content-Type': 'application/json', ...db.getAuthHeaders() },
+        body: JSON.stringify(updated)
       });
     } catch (err) {
       console.error('Failed to sync API Key settings to server DB:', err);
@@ -1014,7 +1028,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setBusTrialDays('30');
     setBusStockTransferEnabled(false);
     setBusCurrency(sysConfigState.defaultCurrency || 'GHC');
-    setRegBusPassword('123456');
+    setRegBusPassword('');
     setRegisteringBusiness(true);
   };
 
@@ -1022,6 +1036,11 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     e.preventDefault();
     if (!busName || !busOwner || !busEmail || !busPhone) {
       alert('Please complete all mandatory business registration fields.');
+      return;
+    }
+
+    if (!regBusPassword || regBusPassword.length < 8) {
+      alert('Owner initial password must be at least 8 characters long.');
       return;
     }
 
@@ -1056,8 +1075,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
     db.saveBusiness(newBusiness);
 
-    // Register primary owner account
-    const hashedPass = await hashPassword(regBusPassword || '123456');
+    // Register primary owner account with hashed password
+    const hashedPass = await hashPassword(regBusPassword);
     const ownerUser: User = {
       id: 'u-' + Math.random().toString(36).substring(2, 9),
       businessId: busId,
@@ -1095,16 +1114,19 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setBusSubscriptionAmount(String(bus.subscriptionAmount || sysConfigState.defaultSubscriptionAmount || 299));
   };
 
-  const handleSaveBusiness = (e: React.FormEvent) => {
+  const handleSaveBusiness = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingBusiness) return;
+    if (!editingBusiness || isSavingBusiness) return;
+
+    setIsSavingBusiness(true);
+    setSaveBusinessSuccess(null);
 
     const updated: Business = {
       ...editingBusiness,
-      name: busName,
-      ownerName: busOwner,
-      email: busEmail,
-      phone: busPhone,
+      name: busName.trim(),
+      ownerName: busOwner.trim(),
+      email: busEmail.trim(),
+      phone: busPhone.trim(),
       category: busCategory,
       subscriptionStatus: busSubStatus,
       currency: busCurrency,
@@ -1112,18 +1134,34 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       isStockTransferEnabled: busStockTransferEnabled
     };
 
-    db.saveBusiness(updated);
-    alert(`Business "${busName}" updated successfully.`);
-    setEditingBusiness(null);
-    forceUpdate();
+    try {
+      const res = await db.updateBusinessInCloud(updated);
+      const savedBus = res.business || updated;
+      
+      // Update reactive firestoreBusinesses
+      setFirestoreBusinesses(prev => prev.map(b => b.id === savedBus.id ? savedBus : b));
+      setSaveBusinessSuccess(`Business "${savedBus.name}" information saved to the cloud successfully!`);
+      
+      setTimeout(() => {
+        setEditingBusiness(null);
+        setIsSavingBusiness(false);
+        setSaveBusinessSuccess(null);
+        forceUpdate();
+      }, 700);
+    } catch (err: any) {
+      alert(`Error saving business to cloud: ${err.message || 'Please check your connection and retry.'}`);
+      setIsSavingBusiness(false);
+    }
   };
 
-  const handleToggleBusinessStatus = (id: string, currentStatus: 'active' | 'suspended') => {
+  const handleToggleBusinessStatus = async (id: string, currentStatus: 'active' | 'suspended') => {
     const bus = businesses.find(b => b.id === id);
     if (!bus) return;
     const nextStatus = currentStatus === 'active' ? 'suspended' : 'active';
-    db.saveBusiness({ ...bus, status: nextStatus });
-    alert(`Business workspace status changed to ${nextStatus.toUpperCase()}.`);
+    const updated = { ...bus, status: nextStatus };
+    setFirestoreBusinesses(prev => prev.map(b => b.id === id ? updated : b));
+    await db.updateBusinessInCloud(updated);
+    alert(`Business workspace status changed to ${nextStatus.toUpperCase()} and saved to cloud.`);
     forceUpdate();
   };
 
@@ -1172,7 +1210,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
       setDeletingBusinessTarget(null);
       setDeleteConfirmInput('');
       setDeleteSuccessMessage(`Business / School "${busName}" and all associated database records have been permanently deleted.`);
-      setTimeout(() => setDeleteSuccessMessage(null), 6000);
+      setTimeout(() => setDeleteSuccessMessage(null), 2000);
       forceUpdate();
     } catch (err: any) {
       console.error('Delete business error:', err);
@@ -2184,7 +2222,12 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     );
                   })}
 
-                  {filteredBusinesses.length === 0 && (
+                  {isLoadingBusinesses && firestoreBusinesses.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 bg-white rounded-2xl border border-slate-200 flex flex-col items-center justify-center gap-2">
+                      <RefreshCw className="h-6 w-6 animate-spin text-emerald-600" />
+                      <p className="font-semibold text-xs text-slate-600">Synchronizing registered businesses from database...</p>
+                    </div>
+                  ) : filteredBusinesses.length === 0 && (
                     <div className="py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
                       No registered {bizCategoryFilter === 'school' ? 'schools' : 'businesses'} match your filter criteria.
                     </div>
@@ -2432,9 +2475,18 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                         );
                       })}
 
-                      {filteredBusinesses.length === 0 && (
+                      {isLoadingBusinesses && firestoreBusinesses.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="py-12 text-center text-slate-400">
+                          <td colSpan={9} className="py-12 text-center text-slate-500">
+                            <div className="flex items-center justify-center gap-2">
+                              <RefreshCw className="h-5 w-5 animate-spin text-emerald-600" />
+                              <span className="font-semibold text-xs">Synchronizing registered businesses from database...</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : filteredBusinesses.length === 0 && (
+                        <tr>
+                          <td colSpan={9} className="py-12 text-center text-slate-400">
                             No registered {bizCategoryFilter === 'school' ? 'schools' : 'business tenants'} match your search query.
                           </td>
                         </tr>
@@ -2650,8 +2702,8 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sender ID</p>
-                    <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{smsConfig.senderId || 'Legacy Inc'}</p>
-                    <p className="text-[10px] text-slate-500">Max 11 Alphanumeric</p>
+                    <p className="font-extrabold text-slate-800 text-sm mt-0.5 font-mono">{(smsConfig.senderId && !smsConfig.senderId.toLowerCase().includes('legacy')) ? smsConfig.senderId : (businesses[0]?.name?.slice(0, 11) || 'Shop')}</p>
+                    <p className="text-[10px] text-slate-500">Shop Brand (Max 11 Chars)</p>
                   </div>
 
                   <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
@@ -3541,7 +3593,9 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                               </span>
                             </td>
                             <td className="py-3 px-4 font-mono text-[11px] text-slate-700 font-semibold">
-                              {log.senderId || log.sender || 'Legacy Inc'}
+                              {(log.senderId && !log.senderId.toLowerCase().includes('legacy'))
+                                ? log.senderId
+                                : ((log.sender && !log.sender.toLowerCase().includes('legacy')) ? log.sender : 'Shop')}
                             </td>
                             <td className="py-3 px-4 max-w-xs truncate text-slate-600" title={log.message}>
                               {log.message}
@@ -4319,11 +4373,29 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h4 className="font-extrabold text-slate-800 text-sm">Edit Business Tenant Details</h4>
-              <button onClick={() => setEditingBusiness(null)} className="p-1 rounded-full hover:bg-slate-100 text-slate-400 cursor-pointer">
+              <div>
+                <h4 className="font-extrabold text-slate-800 text-sm">Edit Business Tenant Details</h4>
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 mt-0.5">
+                  <Cloud className="h-3 w-3" />
+                  <span>Cloud &amp; Firestore Synced</span>
+                </div>
+              </div>
+              <button 
+                onClick={() => !isSavingBusiness && setEditingBusiness(null)} 
+                disabled={isSavingBusiness}
+                className="p-1 rounded-full hover:bg-slate-100 text-slate-400 cursor-pointer disabled:opacity-50"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
+
+            {saveBusinessSuccess && (
+              <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span>{saveBusinessSuccess}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveBusiness} className="space-y-4 mt-4 text-xs">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Business Name</label>
@@ -4452,15 +4524,27 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 <button
                   type="button"
                   onClick={() => setEditingBusiness(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold cursor-pointer"
+                  disabled={isSavingBusiness}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl font-bold shadow cursor-pointer"
+                  disabled={isSavingBusiness}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-xl font-bold shadow-xs cursor-pointer flex items-center gap-2 transition-all"
                 >
-                  Save Changes
+                  {isSavingBusiness ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Saving to Cloud...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cloud className="w-4 h-4" />
+                      <span>Save Changes to Cloud</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

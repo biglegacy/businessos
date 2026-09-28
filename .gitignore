@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+sms_config.json
+cloud_db.json
+uploads/
+.wrangler/
+*.pem
+*.key

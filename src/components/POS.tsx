@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { db, getCurrencySymbol, formatCurrency } from '../lib/db';
+import { db, getCurrencySymbol, formatCurrency, formatQuantityWithUnit } from '../lib/db';
 import { isProductBasedBusiness } from '../lib/businessType';
 import { Product, Service, CartItem, Customer, Sale, Business, User, ProfessionalServiceJob } from '../types';
 import { notifyNewSale, notifyLowStock } from '../lib/pushNotifications';
@@ -264,6 +264,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
           price: type === 'product' ? (item as Product).sellingPrice : (item as Service).price,
           quantity: 1,
           stockLimit: type === 'product' ? (item as Product).stockQuantity : undefined,
+          unitOfMeasurement: type === 'product' ? (item as Product).unitOfMeasurement : undefined,
           imageUrl: type === 'product' ? (item as Product).imageUrl : undefined,
           taxRate: item.taxRate
         }];
@@ -567,7 +568,8 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
           name: i.name,
           type: i.type,
           price: i.price,
-          quantity: i.quantity
+          quantity: i.quantity,
+          unitOfMeasurement: i.unitOfMeasurement
         })),
         subtotal,
         discount,
@@ -679,7 +681,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
         const receiptNum = transactionId.slice(-6).toUpperCase();
         const currency = newSale.currency || liveBusiness.currency || business.currency || 'GHS';
-        const itemsSummary = newSale.items.map(i => `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
+        const itemsSummary = newSale.items.map(i => i.unitOfMeasurement ? `${formatQuantityWithUnit(i.quantity, i.unitOfMeasurement)} ${i.name}` : `${i.quantity}x ${i.name}`).slice(0, 3).join(', ');
         const paidStr = formatCurrency(newSale.amountPaid ?? newSale.total, currency);
         const totalStr = formatCurrency(newSale.total, currency);
         const balanceStr = newSale.paymentMethod === 'credit' && (newSale.amountOwed || 0) > 0
@@ -688,34 +690,31 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
 
         const msg = `Thank you for shopping at ${liveBusiness.name}. Receipt #${receiptNum}. Items: ${itemsSummary}. Total: ${totalStr}. Paid: ${paidStr}. ${balanceStr}. Payment: ${newSale.paymentMethod.toUpperCase()}. Thank you!`;
 
-        // Silent background dispatch: run in detached task without blocking checkout or displaying dispatching UI
-        setTimeout(() => {
-          db.sendSms({
-            recipient: targetPhone,
-            message: msg,
-            businessId: liveBusiness.id,
-            businessName: liveBusiness.name,
-            senderId: liveBusiness.name,
-            idempotencyKey: `pos_receipt_${transactionId}`,
-            type: 'receipt',
-            clientTriggerTime: Date.now()
-          }).then(res => {
-            const updatedSale: Sale = {
-              ...newSale,
-              smsStatus: res.success ? 'Sent' : 'Failed',
-              smsStatusDetail: res.success ? `Sent to ${targetPhone}` : (res.message || 'Delivery failed')
-            };
-            db.saveSale(business.id, updatedSale);
-          }).catch(err => {
-            console.warn('[POS Background SMS] Silent background receipt error:', err);
-            const updatedSale: Sale = {
-              ...newSale,
-              smsStatus: 'Failed',
-              smsStatusDetail: err?.message || 'Network error sending SMS'
-            };
-            db.saveSale(business.id, updatedSale);
-          });
-        }, 0);
+        // Direct instant background dispatch without timer delay
+        db.sendSms({
+          recipient: targetPhone,
+          message: msg,
+          businessId: liveBusiness.id,
+          businessName: liveBusiness.name,
+          idempotencyKey: `pos_receipt_${transactionId}`,
+          type: 'receipt',
+          clientTriggerTime: Date.now()
+        }).then(res => {
+          const updatedSale: Sale = {
+            ...newSale,
+            smsStatus: res.success ? 'Sent' : 'Failed',
+            smsStatusDetail: res.success ? `Sent to ${targetPhone}` : (res.message || 'Delivery failed')
+          };
+          db.saveSale(business.id, updatedSale);
+        }).catch(err => {
+          console.warn('[POS Background SMS] Silent background receipt error:', err);
+          const updatedSale: Sale = {
+            ...newSale,
+            smsStatus: 'Failed',
+            smsStatusDetail: err?.message || 'Network error sending SMS'
+          };
+          db.saveSale(business.id, updatedSale);
+        });
       }
 
       showSuccess('Sale Completed', 'Order completed successfully.');
@@ -770,7 +769,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
     const itemsHtml = createdSale.items.map(item => `
       <tr>
         <td style="padding: 4px 0;">${item.name}</td>
-        <td style="padding: 4px 0; text-align: center;">${item.quantity}</td>
+        <td style="padding: 4px 0; text-align: center;">${item.unitOfMeasurement ? formatQuantityWithUnit(item.quantity, item.unitOfMeasurement) : item.quantity}</td>
         <td style="padding: 4px 0; text-align: right;">GHC ${(item.price * item.quantity).toFixed(2)}</td>
       </tr>
     `).join('');
@@ -1274,7 +1273,7 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
                   <div className="min-w-0 flex-1 pr-1">
                     <p className="font-bold text-slate-800 text-xs truncate break-all">{item.name}</p>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      {item.quantity} x {formatCurrency(item.price, business.currency)}
+                      {item.unitOfMeasurement ? formatQuantityWithUnit(item.quantity, item.unitOfMeasurement) : `${item.quantity} units`} x {formatCurrency(item.price, business.currency)}
                     </p>
                   </div>
 
@@ -1627,7 +1626,9 @@ export function POS({ business, user, onSaleComplete, branchId }: POSProps) {
               <div className="space-y-1.5">
                 {createdSale.items.map((item, idx) => (
                   <div key={item.itemId ? `${item.itemId}-${idx}` : idx} className="flex justify-between text-slate-700">
-                    <span className="truncate pr-4">{item.quantity}x {item.name}</span>
+                    <span className="truncate pr-4">
+                      {item.unitOfMeasurement ? `${formatQuantityWithUnit(item.quantity, item.unitOfMeasurement)} ${item.name}` : `${item.quantity}x ${item.name}`}
+                    </span>
                     <span className="shrink-0">{formatCurrency(item.price * item.quantity, createdSale.currency || business.currency)}</span>
                   </div>
                 ))}

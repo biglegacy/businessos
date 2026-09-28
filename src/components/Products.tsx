@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { db, getProductPlaceholderSvg, getCurrencySymbol, formatCurrency } from '../lib/db';
+import { db, getProductPlaceholderSvg, getCurrencySymbol, formatCurrency, formatQuantityWithUnit } from '../lib/db';
 import { Product, Service, Business, User } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
 import { 
@@ -170,7 +170,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
     setProdStock(0);
     setProdBarcode('BOS-' + Math.floor(Math.random()*900000+100000));
     setProdImage(null);
-    setProdLowStockThreshold('');
+    setProdLowStockThreshold(business.defaultLowStockThreshold || 5);
     setProdBrand('');
     setProdUnit('pcs');
     setProdSupplier('');
@@ -599,7 +599,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                       <div className="flex items-center gap-2 mt-1 font-mono text-[11px] text-slate-500">
                         <span>SKU: <strong className="text-slate-700">{p.barcode || '—'}</strong></span>
                         <span>&bull;</span>
-                        <span>Stock: <strong className={isOut ? 'text-rose-600 font-black' : isLow ? 'text-amber-600 font-black' : 'text-slate-700'}>{p.stockQuantity}</strong></span>
+                        <span>Stock: <strong className={isOut ? 'text-rose-600 font-black' : isLow ? 'text-amber-600 font-black' : 'text-slate-700'}>{formatQuantityWithUnit(p.stockQuantity, p.unitOfMeasurement)}</strong></span>
                       </div>
                     </div>
                   </div>
@@ -716,7 +716,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                           {isOut ? 'Out of stock' : isLow ? 'Low Stock' : 'In Stock'}
                         </span>
                         <div className="text-[10px] text-slate-400 font-medium">
-                          <p>Current: <strong className="text-slate-600">{p.stockQuantity}</strong></p>
+                          <p>Current: <strong className="text-slate-600">{formatQuantityWithUnit(p.stockQuantity, p.unitOfMeasurement)}</strong></p>
                           <p>Alert Level: <strong className="text-slate-600">{threshold}</strong></p>
                         </div>
                       </div>
@@ -1015,6 +1015,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                       className="block w-full px-3 py-2 border border-slate-200 bg-white rounded-lg text-slate-800 focus:ring-1 focus:ring-emerald-500 font-semibold cursor-pointer"
                     >
                       <option value="pcs">pcs (Pieces)</option>
+                      <option value="Bag">Bag (Bags / Sacks)</option>
                       <option value="box">box (Box / Carton)</option>
                       <option value="pack">pack (Pack)</option>
                       <option value="kg">kg (Kilogram)</option>
@@ -1057,7 +1058,7 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                 </div>
 
                 {/* Pricing & Stock */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-slate-500 font-bold uppercase mb-1">Cost Price ({getCurrencySymbol(business.currency)})</label>
                     <input
@@ -1090,6 +1091,18 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                       onChange={(e) => setProdStock(parseInt(e.target.value) || 0)}
                       placeholder="0"
                       className="block w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 font-bold uppercase mb-1">Low Stock Alert Limit</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={prodLowStockThreshold}
+                      onChange={(e) => setProdLowStockThreshold(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0))}
+                      placeholder={`e.g. ${business.defaultLowStockThreshold || 5}`}
+                      className="block w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 bg-white"
+                      title="Threshold for dashboard low stock warnings"
                     />
                   </div>
                 </div>
@@ -1195,13 +1208,13 @@ export function Products({ business, user, onCatalogChanged }: ProductsProps) {
                         />
                       </div>
                       <div>
-                        <label className="block text-slate-500 font-bold uppercase mb-1">Reorder Level (Alert)</label>
+                        <label className="block text-slate-500 font-bold uppercase mb-1">Supplier Contact Phone</label>
                         <input
-                          type="number"
-                          value={prodLowStockThreshold}
-                          onChange={(e) => setProdLowStockThreshold(e.target.value === '' ? '' : parseInt(e.target.value) || 0)}
-                          placeholder="e.g. 10"
-                          className="block w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 bg-white"
+                          type="text"
+                          value={prodSupplierContact}
+                          onChange={(e) => setProdSupplierContact(e.target.value)}
+                          placeholder="+233 24 000 0000"
+                          className="block w-full px-3 py-2 border border-slate-200 rounded-lg text-slate-800 font-medium focus:ring-1 focus:ring-emerald-500 bg-white"
                         />
                       </div>
                     </div>

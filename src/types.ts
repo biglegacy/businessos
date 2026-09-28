@@ -139,16 +139,19 @@ export interface Business {
   priceUpdatedBy?: string; // Who updated the pricing (e.g. 'Super Admin')
   updatedAt?: string; // Last update timestamp
   subscriptionPlan?: string; // Optional custom or legacy plan name
+  smsSenderId?: string; // Custom SMS sender ID for receipts and alerts (max 11 chars alphanumeric, defaults to shop name)
   receiptConfig: {
     logoUrl?: string;
     businessName?: string;
     contactInfo?: string;
     footerMessage?: string;
+    senderId?: string;
     layout?: 'standard' | 'compact' | 'elegant';
   };
   subscriptionStatus?: 'trial' | 'active' | 'unpaid' | 'suspended';
   registrationDate?: string;
   trialEndDate?: string;
+  defaultLowStockThreshold?: number; // Store-wide default low stock alert threshold
   subscriptionCycleStartDate?: string;
   subscriptionCycleEndDate?: string;
   lastPaymentDate?: string;
@@ -183,6 +186,7 @@ export interface User {
   schoolId?: string; // Optional educational institution reference
   name: string;
   email: string;
+  phone?: string;
   role: UserRole;
   permissions?: string[]; // Custom assigned module permissions, e.g. ['POS', 'Products', 'Inventory', 'Sales']
   status: 'active' | 'disabled';
@@ -329,6 +333,7 @@ export interface CartItem {
   price: number;
   quantity: number;
   stockLimit?: number; // Only for products
+  unitOfMeasurement?: string;
   jobId?: string; // Associated professional service job if any
   imageUrl?: string;
   taxRate?: number;
@@ -344,6 +349,7 @@ export interface Sale {
     type: 'product' | 'service';
     price: number;
     quantity: number;
+    unitOfMeasurement?: string;
   }[];
   subtotal?: number;
   discount: number; // percentage or fixed

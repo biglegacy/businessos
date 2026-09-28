@@ -138,37 +138,21 @@ export const ServiceBusinessDashboard: React.FC<ServiceBusinessDashboardProps> =
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white p-6 rounded-3xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-white/10 rounded-full text-xs font-semibold tracking-wide text-blue-200">
-            <Briefcase className="h-3.5 w-3.5" />
-            <span>Professional Services & Work Order OS</span>
-          </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">
-            {business.name} Operations Hub
-          </h2>
-          <p className="text-xs text-blue-200/90 max-w-xl">
-            Track service appointments, customer work orders, technician assignments, job stages, and receivables.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            onClick={() => setIsJobModalOpen(true)}
-            className="px-4 py-2.5 bg-blue-500 hover:bg-blue-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 transition cursor-pointer shadow-md"
-          >
-            <Plus className="h-4 w-4" />
-            <span>New Service Job</span>
-          </button>
-          <button
-            onClick={() => onNavigate('Services')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-white/10"
-          >
-            <Wrench className="h-4 w-4" />
-            <span>Service Catalog ({services.length})</span>
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2.5">
+        <button
+          onClick={() => setIsJobModalOpen(true)}
+          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer shadow-xs"
+        >
+          <Plus className="h-4 w-4" />
+          <span>New Service Job</span>
+        </button>
+        <button
+          onClick={() => onNavigate('Services')}
+          className="px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-2 transition cursor-pointer border border-slate-200 shadow-2xs"
+        >
+          <Wrench className="h-4 w-4 text-blue-600" />
+          <span>Service Catalog ({services.length})</span>
+        </button>
       </div>
 
       {/* KPI Grid */}

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/db';
+import { db, formatSenderIdFromBusinessName } from '../lib/db';
 import { Business, User } from '../types';
 import { PrinterManagement } from './PrinterManagement';
 import { ImageUploadInput } from './ImageUploadInput';
@@ -12,7 +12,7 @@ import { InstallAppButton } from './InstallAppButton';
 import { 
   Settings as SettingsIcon, Building, Shield, Bell, 
   Download, Laptop, Smartphone, Check, Sparkles, Upload,
-  CreditCard, Clock, Calendar
+  CreditCard, Clock, Calendar, Hash, Copy
 } from 'lucide-react';
 
 interface SettingsProps {
@@ -24,8 +24,30 @@ interface SettingsProps {
 export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
   // PWA Prompt installer trigger
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: minimal-ui)').matches ||
+      (navigator as any).standalone === true ||
+      localStorage.getItem('pwa_installed') === 'true'
+    );
+  });
   const [activeSettingsTab, setActiveSettingsTab] = useState<'profile' | 'printers'>('profile');
+
+  // Tenant ID State & Copy
+  const [copiedTenantId, setCopiedTenantId] = useState(false);
+  const tenantIdCode = business?.id 
+    ? (business.id.startsWith('b_') ? `BOS-${business.id.slice(2).toUpperCase()}` : `BOS-${business.id.toUpperCase()}`)
+    : 'BOS-WORKSPACE';
+
+  const handleCopyTenantId = () => {
+    try {
+      navigator.clipboard.writeText(tenantIdCode);
+      setCopiedTenantId(true);
+      setTimeout(() => setCopiedTenantId(false), 2000);
+    } catch (err) {}
+  };
 
   // Forms
   const [busName, setBusName] = useState(business.name);
@@ -35,12 +57,14 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
   const [busCategory, setBusCategory] = useState(business.category);
   const [logoBase64, setLogoBase64] = useState(business.logoUrl || '');
   const [selectedCurrency, setSelectedCurrency] = useState(business.currency || 'GHC');
+  const [defaultLowStockThreshold, setDefaultLowStockThreshold] = useState<number>(business.defaultLowStockThreshold || 5);
 
-  // Receipts Config
+  // Receipts & SMS Brand Config
   const [recName, setRecName] = useState(business.receiptConfig.businessName || business.name);
   const [recContact, setRecContact] = useState(business.receiptConfig.contactInfo || business.phone);
   const [recFooter, setRecFooter] = useState(business.receiptConfig.footerMessage || 'Thank you!');
   const [recLayout, setRecLayout] = useState<'standard' | 'compact' | 'elegant'>(business.receiptConfig.layout || 'standard');
+  const [smsSenderId, setSmsSenderId] = useState(business.smsSenderId || business.receiptConfig?.senderId || formatSenderIdFromBusinessName(business.receiptConfig?.businessName || business.name));
 
   // Change password
   const [currentPass, setCurrentPass] = useState('');
@@ -63,13 +87,29 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
       }
     };
 
+    // Dynamic check for standalone mode and install events
+    const checkStandalone = () => {
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: minimal-ui)').matches ||
+        (navigator as any).standalone === true ||
+        localStorage.getItem('pwa_installed') === 'true';
+      if (isStandalone) {
+        setIsInstalled(true);
+      }
+    };
+    checkStandalone();
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      try {
+        localStorage.setItem('pwa_installed', 'true');
+      } catch (e) {}
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
     window.addEventListener('pwa-installable', handleCustomInstallable);
-    
-    // Check if app is running in standalone PWA mode
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setIsInstalled(true);
-    }
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     // Check if the global variable already has the prompt
     if (window.deferredPrompt) {
@@ -79,6 +119,7 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
       window.removeEventListener('pwa-installable', handleCustomInstallable);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
@@ -118,11 +159,14 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
       category: busCategory,
       logoUrl: logoBase64 || undefined,
       currency: selectedCurrency,
+      defaultLowStockThreshold: Number(defaultLowStockThreshold) >= 0 ? Number(defaultLowStockThreshold) : 5,
+      smsSenderId: smsSenderId ? smsSenderId.trim().slice(0, 11) : undefined,
       receiptConfig: {
         ...business.receiptConfig,
         businessName: recName,
         contactInfo: recContact,
         footerMessage: recFooter,
+        senderId: smsSenderId ? smsSenderId.trim().slice(0, 11) : undefined,
         layout: recLayout
       }
     };
@@ -427,6 +471,57 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
                 <option value="EUR">€ - Euro (EUR)</option>
               </select>
             </div>
+
+            <div>
+              <label className="block text-slate-500 font-bold uppercase mb-1">
+                Default Low Stock Alert Threshold
+              </label>
+              <input
+                type="number"
+                min="0"
+                disabled={!canEditWorkspace}
+                value={defaultLowStockThreshold}
+                onChange={(e) => setDefaultLowStockThreshold(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))}
+                placeholder="5"
+                className="block w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 bg-white font-bold focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 text-xs"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Store-wide default units threshold that triggers low stock warnings and dashboard alerts when a product does not specify its own individual threshold.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-500 font-bold uppercase mb-1">Assigned Tenant ID</label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    readOnly
+                    value={tenantIdCode}
+                    className="block w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 font-mono font-bold text-xs select-all focus:outline-none"
+                  />
+                  <Hash className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyTenantId}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl font-bold text-slate-700 text-xs shrink-0 cursor-pointer flex items-center gap-1.5 transition-colors"
+                  title="Copy Tenant ID"
+                >
+                  {copiedTenantId ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5 text-slate-600" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Receipt Invoicing Metadata Customizer */}
@@ -460,6 +555,30 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
                 />
               </div>
 
+              <div className="sm:col-span-2 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-slate-700 font-bold uppercase text-[11px]">
+                    SMS Sender Name (Shop Brand)
+                  </label>
+                  <span className="text-[10px] text-slate-500 font-mono font-bold">
+                    {(smsSenderId || '').length}/11 chars
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={11}
+                  disabled={!canEditWorkspace}
+                  value={smsSenderId}
+                  onChange={(e) => setSmsSenderId(e.target.value.replace(/[^a-zA-Z0-9 ]/g, ''))}
+                  placeholder={formatSenderIdFromBusinessName(busName) || 'Shop'}
+                  className="block w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-800 font-mono uppercase focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 text-xs tracking-wider font-bold"
+                />
+                <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-500">
+                  <span>Customers see this exact shop name on their phones as the SMS sender for receipts and alerts (letters & numbers only).</span>
+                  <span className="shrink-0 font-semibold text-emerald-700 ml-2">Preview: <strong>{formatSenderIdFromBusinessName(smsSenderId || busName) || 'Shop'}</strong></span>
+                </div>
+              </div>
+
               <div className="sm:col-span-2">
                 <label className="block text-slate-500 font-bold uppercase mb-1">Invoicing Header Address Details</label>
                 <textarea
@@ -487,21 +606,76 @@ export function Settings({ business, user, onUpdateBusiness }: SettingsProps) {
         </form>
       </div>
 
-      {/* Right Column utilities: PWA Installer, Backups, Password change */}
+      {/* Right Column utilities: Tenant Identity, PWA Installer, Backups, Password change */}
       <div className="space-y-6">
-        {/* PWA INSTALLATION PANEL */}
+        {/* TENANT WORKSPACE IDENTITY CARD */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4 text-xs">
-          <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-            <Smartphone className="h-4.5 w-4.5 text-emerald-800" /> WebApp PWA Installation
-          </h4>
-          <p className="text-slate-500 leading-normal">
-            Run **BusinessOS** directly on your desktop, tablet, or smartphone as a native, fully secure standalone application workspace.
+          <div className="flex items-center justify-between">
+            <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <Hash className="h-4.5 w-4.5 text-emerald-800" /> Tenant Workspace Identity
+            </h4>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Isolated Tenant
+            </span>
+          </div>
+
+          <p className="text-slate-500 leading-normal text-[11px]">
+            Your dedicated multi-tenant partition code. Keep this identifier handy for tenant migrations, technical support, and multi-branch operations.
           </p>
 
-          <div className="pt-2">
-            <InstallAppButton className="w-full justify-center" />
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Public Tenant Code</span>
+              <button
+                type="button"
+                onClick={handleCopyTenantId}
+                className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800 transition cursor-pointer bg-white px-2 py-0.5 rounded-lg border border-slate-200 shadow-xs"
+              >
+                {copiedTenantId ? (
+                  <>
+                    <Check className="h-3 w-3 text-emerald-600" />
+                    <span>Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3 text-slate-500" />
+                    <span>Copy ID</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="font-mono text-sm font-extrabold text-slate-900 tracking-wider">
+              {tenantIdCode}
+            </div>
+
+            <div className="pt-2 border-t border-slate-200/80 grid grid-cols-2 gap-2 text-[10px]">
+              <div>
+                <span className="text-slate-400 block font-medium">Database Partition</span>
+                <span className="font-mono text-slate-700 font-bold truncate block">{business.id}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block font-medium">Isolation Status</span>
+                <span className="text-emerald-700 font-bold block">Encrypted & Isolated</span>
+              </div>
+            </div>
           </div>
         </div>
+
+        {/* PWA INSTALLATION PANEL (Hidden when already installed) */}
+        {!isInstalled && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4 text-xs">
+            <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <Smartphone className="h-4.5 w-4.5 text-emerald-800" /> WebApp PWA Installation
+            </h4>
+            <p className="text-slate-500 leading-normal">
+              Run **BusinessOS** directly on your desktop, tablet, or smartphone as a native, fully secure standalone application workspace.
+            </p>
+
+            <div className="pt-2">
+              <InstallAppButton className="w-full justify-center" />
+            </div>
+          </div>
+        )}
 
         {/* SECURE PASSWORDS */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4 text-xs">

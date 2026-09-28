@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { db } from '../lib/db';
 import { User, Business, UserRole } from '../types';
+import { hashPassword } from './AuthPortal';
 import { 
   Users, Plus, Trash2, Shield, Lock, Activity, 
   X, Check, AlertCircle, Eye, RefreshCw
@@ -212,10 +213,15 @@ export function Employees({ business, currentUser }: EmployeesProps) {
   const employees = db.getUsers().filter(u => u.businessId === business.id);
   const logs = db.getLogs(business.id);
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!staffName || !staffEmail || !staffPassword) {
       alert('Please fill out all employee account fields.');
+      return;
+    }
+
+    if (staffPassword.length < 8) {
+      alert('Employee initial password must be at least 8 characters long for security.');
       return;
     }
 
@@ -227,6 +233,7 @@ export function Employees({ business, currentUser }: EmployeesProps) {
     }
 
     const initialPermissions = ROLE_PERMISSIONS[staffRole]?.defaultPermissions || ['POS', 'Products', 'Inventory', 'Sales'];
+    const hashedPass = await hashPassword(staffPassword);
 
     const newEmp: User = {
       id: 'u-' + Math.random().toString(36).substring(2, 9),
@@ -236,7 +243,7 @@ export function Employees({ business, currentUser }: EmployeesProps) {
       role: staffRole,
       permissions: initialPermissions,
       status: 'active',
-      password: staffPassword,
+      password: hashedPass,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       branchId: selectedBranchIds[0] || '',

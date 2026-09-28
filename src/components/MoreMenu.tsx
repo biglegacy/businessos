@@ -245,10 +245,9 @@ export const MoreMenu: React.FC<MoreMenuProps> = ({
         </div>
       </div>
 
-      {/* Tenant Verification Footer */}
+      {/* Footer */}
       <div className="text-center text-xs text-slate-400 py-4 space-y-1">
-        <p className="font-semibold text-slate-500">BusinessOS &bull; Version 2.6 Cloud</p>
-        <p className="font-mono text-[10px]">Tenant: BOS-{business.id.slice(2).toUpperCase()}</p>
+        <p className="font-semibold text-slate-500">BusinessOS &bull; Enterprise Cloud</p>
       </div>
 
       {/* Help & Support Modal */}
@@ -350,13 +349,9 @@ export const MoreMenu: React.FC<MoreMenuProps> = ({
                 <span className="text-slate-400 font-medium">Operating Currency</span>
                 <span className="font-bold text-slate-800">{business.currency || 'GHC'}</span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+              <div className="flex justify-between items-center py-1">
                 <span className="text-slate-400 font-medium">Phone Contact</span>
                 <span className="font-bold text-slate-800">{business.phone || '—'}</span>
-              </div>
-              <div className="flex justify-between items-center py-1">
-                <span className="text-slate-400 font-medium">Tenant ID</span>
-                <span className="font-mono font-bold text-blue-700">BOS-{business.id.slice(2).toUpperCase()}</span>
               </div>
             </div>
 

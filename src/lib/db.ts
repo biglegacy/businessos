@@ -180,34 +180,17 @@ function mergeRecordArrays(localItems: any[], cloudItems: any[], collectionKey?:
     }
   });
 
-  const isBusinessCollection = collectionKey === 'bos_businesses' || collectionKey === 'businesses';
-
   (Array.isArray(localItems) ? localItems : []).forEach(item => {
     if (item && item.id && !isDeleted(item)) {
       const idStr = String(item.id);
-      if (isBusinessCollection) {
-        if (!cloudItems || cloudItems.length === 0 || mergedMap.has(idStr)) {
-          if (mergedMap.has(idStr)) {
-            const existing = mergedMap.get(idStr);
-            const existingTime = getTime(existing);
-            const localTime = getTime(item);
-            if (localTime > existingTime) {
-              mergedMap.set(idStr, { ...existing, ...item });
-            }
-          } else if (!cloudItems || cloudItems.length === 0) {
-            mergedMap.set(idStr, item);
-          }
-        }
+      const existing = mergedMap.get(idStr);
+      if (!existing) {
+        mergedMap.set(idStr, item);
       } else {
-        const existing = mergedMap.get(idStr);
-        if (!existing) {
-          mergedMap.set(idStr, item);
-        } else {
-          const existingTime = getTime(existing);
-          const localTime = getTime(item);
-          if (localTime >= existingTime) {
-            mergedMap.set(idStr, { ...existing, ...item });
-          }
+        const existingTime = getTime(existing);
+        const localTime = getTime(item);
+        if (localTime >= existingTime) {
+          mergedMap.set(idStr, { ...existing, ...item });
         }
       }
     }
@@ -281,6 +264,71 @@ const DEFAULT_SALES: Sale[] = [];
 const DEFAULT_EXPENSES: Expense[] = [];
 const DEFAULT_LOGS: ActivityLog[] = [];
 
+export function formatSenderIdFromBusinessName(name: string, fallback = 'Shop'): string {
+  if (!name || !name.trim()) return fallback;
+  const trimmed = name.trim();
+  const cleaned = trimmed.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return fallback;
+  if (cleaned.length <= 11) return cleaned;
+
+  // Try compacting spaces (e.g. "Food Mart" -> "FoodMart")
+  const noSpaces = cleaned.replace(/\s+/g, '');
+  if (noSpaces.length <= 11) return noSpaces;
+
+  // Pack words while total length <= 11
+  const words = cleaned.split(' ');
+  let packed = '';
+  for (const w of words) {
+    if ((packed + w).length <= 11) {
+      packed += w;
+    } else {
+      break;
+    }
+  }
+  if (packed.length >= 3) {
+    return packed;
+  }
+
+  return noSpaces.slice(0, 11);
+}
+
+// Universal quantity + unit of measure formatter (e.g. 5 Bags, 1 Bag, 5 Boxes, 1 Box, etc.)
+export function formatQuantityWithUnit(quantity: number, unit?: string): string {
+  if (!unit || !unit.trim()) {
+    return `${quantity} units`;
+  }
+  const u = unit.trim();
+  const lower = u.toLowerCase();
+
+  if (lower === 'bag' || lower === 'bags') {
+    return quantity === 1 ? `1 Bag` : `${quantity} Bags`;
+  }
+  if (lower === 'box' || lower === 'boxes') {
+    return quantity === 1 ? `1 Box` : `${quantity} Boxes`;
+  }
+  if (lower === 'pack' || lower === 'packs') {
+    return quantity === 1 ? `1 Pack` : `${quantity} Packs`;
+  }
+  if (lower === 'pcs' || lower === 'pc' || lower === 'pieces' || lower === 'piece') {
+    return quantity === 1 ? `1 pc` : `${quantity} pcs`;
+  }
+  if (lower === 'bottle' || lower === 'bottles') {
+    return quantity === 1 ? `1 Bottle` : `${quantity} Bottles`;
+  }
+  if (lower === 'pair' || lower === 'pairs') {
+    return quantity === 1 ? `1 Pair` : `${quantity} Pairs`;
+  }
+  if (lower === 'kg' || lower === 'g' || lower === 'ltr' || lower === 'l' || lower === 'ml') {
+    return `${quantity} ${unit}`;
+  }
+
+  // General pluralization fallback
+  if (quantity === 1) {
+    return `1 ${unit}`;
+  }
+  return u.endsWith('s') ? `${quantity} ${unit}` : `${quantity} ${unit}s`;
+}
+
 // LocalStorage Helper Class
 class CloudDatabase {
   private listeners: (() => void)[] = [];
@@ -304,7 +352,16 @@ class CloudDatabase {
     });
     this.unsubscribeFirestoreListeners = [];
 
+    // Filter out server-only sensitive config collections from client-side direct listeners
+    const serverOnlyKeys = new Set([
+      'bos_sms_config',
+      'bos_sms_settings',
+      'bos_paystack_settings',
+      'bos_paynow_settings'
+    ]);
+
     ALL_DB_KEYS.forEach(key => {
+      if (serverOnlyKeys.has(key)) return;
       try {
         const colRef = collection(firestore, key);
         const unsub = onSnapshot(colRef, (snapshot) => {
@@ -325,11 +382,17 @@ class CloudDatabase {
             this.notifyListeners();
           }
         }, (err) => {
-          console.warn(`Firestore real-time snapshot note for ${key}:`, err);
+          if (err && (err.code === 'permission-denied' || (err.message && err.message.includes('insufficient permissions')))) {
+            try {
+              handleFirestoreError(err, OperationType.GET, key);
+            } catch (e) {
+              // Properly formatted error logged via handleFirestoreError
+            }
+          }
         });
         this.unsubscribeFirestoreListeners.push(unsub);
       } catch (e) {
-        console.error(`Error attaching Firestore listener for ${key}:`, e);
+        // Non-fatal error during listener attachment
       }
     });
   }
@@ -562,7 +625,7 @@ class CloudDatabase {
     // Backup sync write directly to Cloud Run Express backend database
     fetch('/api/db/save', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
       body: JSON.stringify({ key, data: updatedData })
     }).catch(err => {
       console.warn(`Local write saved, but cloud sync deferred for key ${key}:`, err);
@@ -593,7 +656,9 @@ class CloudDatabase {
   // Pull all synchronized table data from Cloud Run backend
   public async pullFromCloud(): Promise<void> {
     try {
-      const res = await fetch('/api/db/sync');
+      const res = await fetch('/api/db/sync', {
+        headers: this.getAuthHeaders()
+      });
       if (!res.ok) return;
       
       const cloudData = await res.json();
@@ -654,7 +719,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/upload', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ name, base64 })
       });
       if (!res.ok) {
@@ -765,6 +830,76 @@ class CloudDatabase {
       list.push(business);
     }
     this.write('bos_businesses', list);
+    // Asynchronously guarantee cloud synchronization
+    this.updateBusinessInCloud(business).catch(err => {
+      console.warn('Background cloud sync note in saveBusiness:', err);
+    });
+  }
+
+  public async updateBusinessInCloud(business: Business): Promise<{ success: boolean; business?: Business; error?: string }> {
+    const list = this.getBusinesses();
+    const idx = list.findIndex(b => b.id === business.id);
+    const updatedBusiness: Business = {
+      ...business,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (idx >= 0) {
+      list[idx] = updatedBusiness;
+    } else {
+      list.push(updatedBusiness);
+    }
+
+    // 1. Save locally and notify subscribers
+    this.write('bos_businesses', list);
+
+    // 2. Synchronize owner user in bos_users if ownerName, email, or phone changed
+    const users = this.getUsers();
+    const ownerUser = users.find(u => (u.businessId === business.id || u.schoolId === business.id) && u.role === 'owner');
+    if (ownerUser) {
+      let ownerDirty = false;
+      if (business.ownerName && ownerUser.name !== business.ownerName) {
+        ownerUser.name = business.ownerName;
+        ownerDirty = true;
+      }
+      if (business.email && ownerUser.email !== business.email) {
+        ownerUser.email = business.email;
+        ownerDirty = true;
+      }
+      if (business.phone && ownerUser.phone !== business.phone) {
+        ownerUser.phone = business.phone;
+        ownerDirty = true;
+      }
+      if (ownerDirty) {
+        ownerUser.updatedAt = new Date().toISOString();
+        this.write('bos_users', users);
+      }
+    }
+
+    // 3. Direct client Firestore write
+    try {
+      const cleanItem = JSON.parse(JSON.stringify(updatedBusiness));
+      await setDoc(doc(firestore, 'bos_businesses', String(business.id)), cleanItem, { merge: true });
+    } catch (fsErr) {
+      console.warn('Direct client Firestore write error for business:', fsErr);
+    }
+
+    // 4. Direct Cloud backend API write
+    try {
+      const res = await fetch('/api/admin/business-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ business: updatedBusiness })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return { success: true, business: data.business || updatedBusiness };
+      }
+      return { success: true, business: updatedBusiness };
+    } catch (err: any) {
+      console.warn('API cloud sync error for business update:', err);
+      return { success: true, business: updatedBusiness };
+    }
   }
 
   public async toggleBusinessSms(businessId: string, smsEnabled: boolean): Promise<boolean> {
@@ -788,7 +923,7 @@ class CloudDatabase {
     try {
       await fetch('/api/admin/business-sms-toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ businessId, smsEnabled })
       });
       return true;
@@ -828,7 +963,10 @@ class CloudDatabase {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1200);
-      const res = await fetch(`/api/admin/business/${businessId}/sms-status`, { signal: controller.signal });
+      const res = await fetch(`/api/admin/business/${businessId}/sms-status`, { 
+        headers: this.getAuthHeaders(),
+        signal: controller.signal 
+      });
       clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
@@ -877,7 +1015,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/bulk-business-sms-toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ businessIds, smsEnabled })
       });
       const data = await res.json();
@@ -956,7 +1094,7 @@ class CloudDatabase {
     this.write('bos_pricing_plans', plans);
     fetch('/api/admin/pricing-plans', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
       body: JSON.stringify(cleanPlan)
     }).catch(() => {});
   }
@@ -965,7 +1103,8 @@ class CloudDatabase {
     const plans = this.getPricingPlans().filter(p => p.id !== planId);
     this.write('bos_pricing_plans', plans);
     fetch(`/api/admin/pricing-plans/${planId}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
     }).catch(() => {});
   }
 
@@ -1102,9 +1241,7 @@ class CloudDatabase {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          'x-super-admin': 'true',
-          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
-          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
+          ...this.getAuthHeaders()
         }
       }).catch(err => console.warn('Backend deletion fetch note:', err))
     ]);
@@ -1187,11 +1324,9 @@ class CloudDatabase {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-super-admin': 'true',
-          'x-admin-id': currentUser?.id || superAdminUser?.id || 'superadmin',
-          'x-admin-email': currentUser?.email || superAdminUser?.email || 'admin@businessos.com'
+          ...this.getAuthHeaders()
         },
-        body: JSON.stringify({ businessIds: validIds, isSuperAdmin: true })
+        body: JSON.stringify({ businessIds: validIds })
       }).catch(err => console.warn('Backend bulk delete fetch err:', err)),
 
       // Write tombstones and delete main documents from Firestore in parallel
@@ -1236,32 +1371,105 @@ class CloudDatabase {
     };
   }
 
-  public async fetchBusinessesFromFirestore(): Promise<Business[]> {
+  // Authoritative Registered Businesses Loader
+  // Merges server database records with Firestore while strictly honoring permanent tombstones
+  public async loadAuthoritativeBusinesses(): Promise<Business[]> {
+    let deletedIds: string[] = [];
     try {
-      const colRef = collection(firestore, 'bos_businesses');
-      const snap = await getDocs(colRef);
-      let deletedIds: string[] = [];
-      try {
-        const raw = safeStorageGetItem('bos_deleted_business_ids');
-        if (raw) deletedIds = JSON.parse(raw) || [];
-      } catch (e) {}
-      const deletedSet = new Set(deletedIds);
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
+      if (raw) deletedIds = JSON.parse(raw) || [];
+    } catch (e) {}
 
-      const items: Business[] = [];
+    // 1. Fetch from server authoritative admin endpoint
+    let serverBusinesses: Business[] = [];
+    try {
+      const res = await fetch('/api/admin/businesses', {
+        headers: this.getAuthHeaders()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.businesses)) {
+          serverBusinesses = data.businesses;
+        }
+      }
+    } catch (e) {}
+
+    // 2. Fetch from Firestore bos_businesses
+    let firestoreBusinesses: Business[] = [];
+    try {
+      const snap = await getDocs(collection(firestore, 'bos_businesses'));
       snap.forEach(d => {
-        if (!deletedSet.has(d.id)) {
-          items.push({ id: d.id, ...d.data() } as Business);
+        firestoreBusinesses.push({ id: d.id, ...d.data() } as Business);
+      });
+    } catch (e) {}
+
+    // 3. Sync tombstones from Firestore bos_deleted_business_ids
+    try {
+      const delSnap = await getDocs(collection(firestore, 'bos_deleted_business_ids'));
+      delSnap.forEach(d => {
+        if (d.id && !deletedIds.includes(d.id)) {
+          deletedIds.push(d.id);
         }
       });
+      safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+    } catch (e) {}
 
-      const jsonStr = JSON.stringify(items);
-      safeStorageSetItem('bos_businesses', jsonStr);
+    const deletedSet = new Set(deletedIds);
+    const localBusinesses = this.read<Business>('bos_businesses');
+
+    // 4. Authoritative merge:
+    // Start with serverBusinesses, combine with firestoreBusinesses and local active businesses, excluding deletedSet
+    const mergedMap = new Map<string, Business>();
+
+    serverBusinesses.forEach(b => {
+      if (b && b.id && b.id !== 'platform' && !deletedSet.has(b.id)) {
+        mergedMap.set(b.id, b);
+      }
+    });
+
+    firestoreBusinesses.forEach(b => {
+      if (b && b.id && b.id !== 'platform' && !deletedSet.has(b.id)) {
+        if (!mergedMap.has(b.id)) {
+          mergedMap.set(b.id, b);
+        } else {
+          const existing = mergedMap.get(b.id)!;
+          const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+          const fsTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+          if (fsTime > exTime) {
+            mergedMap.set(b.id, { ...existing, ...b });
+          }
+        }
+      }
+    });
+
+    localBusinesses.forEach(b => {
+      if (b && b.id && b.id !== 'platform' && !deletedSet.has(b.id)) {
+        if (!mergedMap.has(b.id)) {
+          mergedMap.set(b.id, b);
+        } else {
+          const existing = mergedMap.get(b.id)!;
+          const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+          const locTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+          if (locTime > exTime) {
+            mergedMap.set(b.id, { ...existing, ...b });
+          }
+        }
+      }
+    });
+
+    const finalBusinesses = Array.from(mergedMap.values());
+
+    // Only update safe storage if valid records exist, or if local was empty
+    if (finalBusinesses.length > 0 || localBusinesses.length === 0) {
+      safeStorageSetItem('bos_businesses', JSON.stringify(finalBusinesses));
       this.notifyListeners();
-      return items;
-    } catch (err) {
-      console.error('fetchBusinessesFromFirestore error:', err);
-      return this.getBusinesses();
     }
+
+    return finalBusinesses.length > 0 ? finalBusinesses : localBusinesses.filter(b => b && b.id && !deletedSet.has(b.id));
+  }
+
+  public async fetchBusinessesFromFirestore(): Promise<Business[]> {
+    return this.loadAuthoritativeBusinesses();
   }
 
   public syncBusinessesFromFirestore(businesses: Business[]): void {
@@ -1714,6 +1922,38 @@ class CloudDatabase {
   }
 
   // --- ACTIVE SESSION MANAGEMENT ---
+  public getAuthToken(): string | null {
+    try {
+      return sessionStorage.getItem('bos_session_token') || localStorage.getItem('bos_session_token') || null;
+    } catch {
+      return null;
+    }
+  }
+
+  public setAuthToken(token: string | null): void {
+    try {
+      if (token) {
+        sessionStorage.setItem('bos_session_token', token);
+      } else {
+        sessionStorage.removeItem('bos_session_token');
+      }
+    } catch {}
+  }
+
+  public getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    const token = this.getAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['x-session-token'] = token;
+    }
+    const currentUser = this.getCurrentUser();
+    if (currentUser?.id) {
+      headers['x-user-id'] = currentUser.id;
+    }
+    return headers;
+  }
+
   public getCurrentUser(): User | null {
     const data = sessionStorage.getItem('bos_current_user');
     return data ? JSON.parse(data) : null;
@@ -1725,11 +1965,27 @@ class CloudDatabase {
     return this.getBusinesses().find(b => b.id === user.businessId) || null;
   }
 
-  public setCurrentUser(user: User): void {
-    sessionStorage.setItem('bos_current_user', JSON.stringify(user));
+  public setCurrentUser(user: User, token?: string): void {
+    // Sanitize user before saving to client storage: NEVER store password or password hash
+    const cleanUser = { ...user };
+    delete (cleanUser as any).password;
+    delete (cleanUser as any).passwordHash;
+    delete (cleanUser as any).salt;
+    sessionStorage.setItem('bos_current_user', JSON.stringify(cleanUser));
+    if (token) {
+      this.setAuthToken(token);
+    }
   }
 
   public logout(): void {
+    const token = this.getAuthToken();
+    if (token) {
+      fetch('/api/auth/logout', { 
+        method: 'POST', 
+        headers: this.getAuthHeaders() 
+      }).catch(() => {});
+    }
+    this.setAuthToken(null);
     sessionStorage.removeItem('bos_current_user');
   }
 
@@ -2420,13 +2676,12 @@ class CloudDatabase {
   // --- PAYSTACK & GLOBAL SYSTEM CONFIG ---
   public getPaystackSettings(): PaystackSettings {
     const list = this.read<PaystackSettings>('bos_paystack_settings');
-    const defaultPub = 'pk_test_paystack_default_public_key';
-    const defaultSec = 'sk_test_paystack_default_secret_key';
+    const defaultPub = '';
     if (list && list.length > 0) {
       const s = list[0];
       return {
         publicKey: s.publicKey || defaultPub,
-        secretKey: s.secretKey || defaultSec,
+        secretKey: '', // Secret key is strictly server-side and never exposed to client
         environment: s.environment || 'test',
         currency: s.currency || 'GHS',
         callbackUrl: s.callbackUrl || '/api/payment/callback',
@@ -2437,7 +2692,7 @@ class CloudDatabase {
     }
     return {
       publicKey: defaultPub,
-      secretKey: defaultSec,
+      secretKey: '',
       environment: 'test',
       currency: 'GHS',
       callbackUrl: '/api/payment/callback',
@@ -2448,10 +2703,27 @@ class CloudDatabase {
   }
 
   public savePaystackSettings(settings: PaystackSettings): void {
-    this.write('bos_paystack_settings', [settings]);
+    // If a secretKey was provided by Super Admin in the UI form, sync it securely to server-side only
+    if (settings.secretKey) {
+      fetch('/api/admin/paystack-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(settings)
+      }).catch(() => {});
+    }
+    // Store only sanitized public configuration on client
+    const safeSettings: PaystackSettings = {
+      ...settings,
+      secretKey: '' // NEVER persist secretKey in client storage
+    };
+    this.write('bos_paystack_settings', [safeSettings]);
   }
 
   public deletePaystackSettings(): void {
+    fetch('/api/admin/paystack-settings', {
+      method: 'DELETE',
+      headers: { ...this.getAuthHeaders() }
+    }).catch(() => {});
     const cleared: PaystackSettings = {
       publicKey: '',
       secretKey: '',
@@ -3054,7 +3326,9 @@ class CloudDatabase {
   // --- ARKESEL SMS GATEWAY CLIENT SERVICE ---
   public async getSmsSettings(): Promise<any> {
     try {
-      const res = await fetch('/api/admin/sms-config');
+      const res = await fetch('/api/admin/sms-config', {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -3064,7 +3338,7 @@ class CloudDatabase {
     return {
       success: false,
       provider: 'Arkesel',
-      senderId: 'Legacy Inc',
+      senderId: 'Shop',
       apiEndpoint: 'https://sms.arkesel.com/api/v2/sms/send',
       isEnabled: true,
       hasApiKey: false,
@@ -3082,7 +3356,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms-config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -3104,7 +3378,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms/test-connection', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ apiKey })
       });
       const data = await res.json();
@@ -3126,7 +3400,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms-toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ isEnabled })
       });
       return await res.json();
@@ -3179,7 +3453,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ 
           phoneNumber, 
           message, 
@@ -3224,48 +3498,78 @@ class CloudDatabase {
   }> {
     const triggerTime = payload.clientTriggerTime || Date.now();
 
-    // Ensure sender's name is always the registered business name
+    // Ensure sender is always the shop brand / business name, NOT the owner email
     let resolvedBusinessName = payload.businessName;
     let resolvedBusinessId = payload.businessId;
+    let resolvedSenderId = payload.senderId;
 
-    if (!resolvedBusinessName) {
-      try {
-        const businesses = this.getBusinesses();
-        if (resolvedBusinessId) {
-          const matched = businesses.find(b => b.id === resolvedBusinessId);
-          if (matched?.name) resolvedBusinessName = matched.name;
+    try {
+      const businesses = this.getBusinesses();
+      let matchedBus: Business | undefined;
+      if (resolvedBusinessId && resolvedBusinessId !== 'platform') {
+        matchedBus = businesses.find(b => b.id === resolvedBusinessId);
+      }
+      if (!matchedBus && !resolvedBusinessId) {
+        const activeId = safeStorageGetItem('bos_active_business_id');
+        if (activeId && activeId !== 'platform') {
+          matchedBus = businesses.find(b => b.id === activeId);
         }
-        if (!resolvedBusinessName) {
-          const activeId = safeStorageGetItem('bos_active_business_id');
-          const activeBus = businesses.find(b => b.id === activeId) || businesses[0];
-          if (activeBus) {
-            resolvedBusinessId = resolvedBusinessId || activeBus.id;
-            resolvedBusinessName = activeBus.name;
-          }
+      }
+      if (matchedBus) {
+        resolvedBusinessId = matchedBus.id;
+        resolvedBusinessName = matchedBus.name;
+        // Strictly use the registered business name or approved custom sender ID for this specific business
+        const rawSender = matchedBus.smsSenderId || matchedBus.receiptConfig?.businessName || matchedBus.name;
+        if (rawSender && !rawSender.includes('@') && !rawSender.toLowerCase().includes('legacy') && !rawSender.toLowerCase().includes('workspace') && !rawSender.toLowerCase().includes('businessos')) {
+          resolvedSenderId = formatSenderIdFromBusinessName(rawSender);
         }
-      } catch (e) {}
+      }
+    } catch (e) {}
+
+    if (!resolvedSenderId && resolvedBusinessName && !resolvedBusinessName.includes('@') && !resolvedBusinessName.toLowerCase().includes('legacy') && !resolvedBusinessName.toLowerCase().includes('workspace') && !resolvedBusinessName.toLowerCase().includes('businessos')) {
+      resolvedSenderId = formatSenderIdFromBusinessName(resolvedBusinessName);
     }
+
+    const requestBody = {
+      ...payload,
+      businessId: resolvedBusinessId,
+      businessName: resolvedBusinessName,
+      senderId: resolvedSenderId || undefined,
+      clientTriggerTime: triggerTime
+    };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6500);
 
     try {
       const res = await fetch('/api/sms/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          ...payload, 
-          businessId: resolvedBusinessId,
-          businessName: resolvedBusinessName,
-          senderId: payload.senderId || resolvedBusinessName,
-          clientTriggerTime: triggerTime 
-        })
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
       });
+      clearTimeout(timeout);
       const data = await res.json();
       return data;
     } catch (err: any) {
+      clearTimeout(timeout);
+      // Auto-enqueue for instant retry in background if network fluctuated or device is offline
+      try {
+        if (typeof window !== 'undefined' && (payload.type === 'receipt' || payload.idempotencyKey)) {
+          const raw = localStorage.getItem('bos_pending_sms_queue');
+          const queue = raw ? JSON.parse(raw) : [];
+          if (!queue.some((i: any) => i.idempotencyKey && i.idempotencyKey === payload.idempotencyKey)) {
+            queue.push({ payload: requestBody, enqueuedAt: Date.now(), retries: 0 });
+            localStorage.setItem('bos_pending_sms_queue', JSON.stringify(queue.slice(-50)));
+          }
+        }
+      } catch (e) {}
+
       const completion = Date.now();
       return {
         success: false,
         status: 'Network error',
-        message: err.message || 'Network error while sending SMS',
+        message: err.message || 'Network error while sending SMS. Auto-retry enqueued.',
         timings: {
           clientTriggerTime: triggerTime,
           submissionCompletionTime: completion,
@@ -3275,9 +3579,41 @@ class CloudDatabase {
     }
   }
 
+  // Drain pending SMS receipts automatically upon network availability
+  public async drainPendingSmsQueue(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem('bos_pending_sms_queue');
+      if (!raw) return;
+      const queue = JSON.parse(raw);
+      if (!Array.isArray(queue) || queue.length === 0) return;
+
+      const remaining: any[] = [];
+      for (const item of queue) {
+        if ((item.retries || 0) >= 5) continue;
+        try {
+          const res = await fetch('/api/sms/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+            body: JSON.stringify(item.payload),
+            keepalive: true
+          });
+          if (!res.ok) {
+            remaining.push({ ...item, retries: (item.retries || 0) + 1 });
+          }
+        } catch {
+          remaining.push({ ...item, retries: (item.retries || 0) + 1 });
+        }
+      }
+      localStorage.setItem('bos_pending_sms_queue', JSON.stringify(remaining));
+    } catch {}
+  }
+
   public async getSmsLogs(): Promise<any[]> {
     try {
-      const res = await fetch('/api/admin/sms/logs');
+      const res = await fetch('/api/admin/sms/logs', {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         return data.logs || [];
@@ -3292,7 +3628,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms/check-status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ smsId })
       });
       return await res.json();
@@ -3305,7 +3641,8 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms/refresh-statuses', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({})
       });
       return await res.json();
     } catch (e: any) {
@@ -3323,7 +3660,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/sms/diagnostic', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       return await res.json();
@@ -3338,7 +3675,9 @@ class CloudDatabase {
 
   public async getBusinessPricingList(): Promise<any[]> {
     try {
-      const res = await fetch('/api/admin/business-pricing');
+      const res = await fetch('/api/admin/business-pricing', {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         return data.businesses || [];
@@ -3371,7 +3710,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/business-pricing', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ businessId, subscriptionAmount, priceUpdatedBy })
       });
       const data = await res.json();
@@ -3398,7 +3737,9 @@ class CloudDatabase {
     priceUpdatedAt?: string | null;
   }> {
     try {
-      const res = await fetch(`/api/business/${businessId}/pricing`);
+      const res = await fetch(`/api/business/${businessId}/pricing`, {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         return {
@@ -3424,7 +3765,9 @@ class CloudDatabase {
 
   public async getAdminPopupPrompts(): Promise<BusinessPopupPrompt[]> {
     try {
-      const res = await fetch('/api/admin/popup-prompts');
+      const res = await fetch('/api/admin/popup-prompts', {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         return data.prompts || [];
@@ -3443,7 +3786,7 @@ class CloudDatabase {
     try {
       const res = await fetch('/api/admin/popup-prompts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(prompt)
       });
       const data = await res.json();
@@ -3468,7 +3811,8 @@ class CloudDatabase {
   public async deletePopupPrompt(id: string): Promise<{ success: boolean; message: string }> {
     try {
       const res = await fetch(`/api/admin/popup-prompts/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -3489,7 +3833,9 @@ class CloudDatabase {
     eligiblePrompts: BusinessPopupPrompt[];
   }> {
     try {
-      const res = await fetch(`/api/business/${businessId}/popup-prompts`);
+      const res = await fetch(`/api/business/${businessId}/popup-prompts`, {
+        headers: this.getAuthHeaders()
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -3517,6 +3863,15 @@ class CloudDatabase {
 }
 
 export const db = new CloudDatabase();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    db.drainPendingSmsQueue().catch(() => {});
+  });
+  setTimeout(() => {
+    db.drainPendingSmsQueue().catch(() => {});
+  }, 2000);
+}
 
 export const getCurrencySymbol = (currencyCode?: string): string => {
   if (!currencyCode) return 'GH₵'; // Default is GHC (GH₵)

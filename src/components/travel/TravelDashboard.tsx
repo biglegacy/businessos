@@ -162,37 +162,19 @@ export const TravelDashboard: React.FC<TravelDashboardProps> = ({ business, user
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto bg-slate-50/50 min-h-screen">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-6 shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 -mt-8 -mr-8 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
-        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-blue-300 font-medium text-xs tracking-wider uppercase mb-1">
-              <Compass className="w-4 h-4" /> Travel & Tour Agency Workspace
-            </div>
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white">
-              {business.name}
-            </h1>
-            <p className="text-slate-300 text-sm mt-1">
-              Real-time flight, hotel, visa, and tour booking operation dashboard
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onNavigate('Bookings Management')}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm shadow-sm transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <Calendar className="w-4 h-4" /> New Booking
-            </button>
-            <button
-              onClick={() => onNavigate('Visa Processing')}
-              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl text-sm border border-slate-700 transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <FileCheck className="w-4 h-4" /> Visa Application
-            </button>
-          </div>
-        </div>
+      <div className="flex items-center justify-end gap-3">
+        <button
+          onClick={() => onNavigate('Bookings Management')}
+          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+        >
+          <Calendar className="w-4 h-4" /> New Booking
+        </button>
+        <button
+          onClick={() => onNavigate('Visa Processing')}
+          className="px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-medium rounded-xl text-sm border border-slate-200 transition-all flex items-center gap-2 cursor-pointer shadow-2xs"
+        >
+          <FileCheck className="w-4 h-4 text-blue-600" /> Visa Application
+        </button>
       </div>
 
       {/* Grid of 16 KPI Cards */}

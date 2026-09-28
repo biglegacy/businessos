@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { db, getCurrencySymbol, formatCurrency } from '../lib/db';
+import { db, getCurrencySymbol, formatCurrency, formatQuantityWithUnit } from '../lib/db';
 import { Sale, Expense, Business, User } from '../types';
 import { 
   FileText, TrendingUp, DollarSign, Award, Calendar, 
@@ -100,13 +100,16 @@ export function Reports({ business, user }: ReportsProps) {
   const employeeLeaderboard = Object.values(employeePerformance).sort((a, b) => b.sales - a.sales);
 
   // 2. Product sales popularity counts
-  const itemPopularity = sales.reduce((acc: Record<string, { name: string; type: string; qty: number; revenue: number }>, curr) => {
+  const itemPopularity = sales.reduce((acc: Record<string, { name: string; type: string; qty: number; revenue: number; unitOfMeasurement?: string }>, curr) => {
     curr.items.forEach(i => {
       if (!acc[i.itemId]) {
-        acc[i.itemId] = { name: i.name, type: i.type, qty: 0, revenue: 0 };
+        acc[i.itemId] = { name: i.name, type: i.type, qty: 0, revenue: 0, unitOfMeasurement: i.unitOfMeasurement };
       }
       acc[i.itemId].qty += i.quantity;
       acc[i.itemId].revenue += (i.price * i.quantity);
+      if (!acc[i.itemId].unitOfMeasurement && i.unitOfMeasurement) {
+        acc[i.itemId].unitOfMeasurement = i.unitOfMeasurement;
+      }
     });
     return acc;
   }, {});
@@ -503,7 +506,7 @@ export function Reports({ business, user }: ReportsProps) {
                 <div key={idx} className="flex justify-between items-center text-xs">
                   <span className="font-bold text-slate-800 truncate pr-4">{item.name}</span>
                   <div className="text-right shrink-0">
-                    <p className="font-bold text-slate-700">{item.qty} Sold</p>
+                    <p className="font-bold text-slate-700">{item.unitOfMeasurement ? formatQuantityWithUnit(item.qty, item.unitOfMeasurement) : `${item.qty} units`} Sold</p>
                     <p className="text-[10px] text-emerald-700 font-bold">{formatCurrency(item.revenue, business.currency)}</p>
                   </div>
                 </div>
@@ -570,7 +573,7 @@ export function Reports({ business, user }: ReportsProps) {
                     <tr key={p.id} className={`hover:bg-slate-50/50 transition ${isOut ? 'bg-rose-50/10' : isLow ? 'bg-amber-50/15' : ''}`}>
                       <td className="py-3.5 px-4 font-bold text-slate-800">{p.name}</td>
                       <td className="py-3.5 px-4 text-slate-500">{p.category}</td>
-                      <td className="py-3.5 px-4 font-semibold text-slate-700">{p.stockQuantity}</td>
+                      <td className="py-3.5 px-4 font-semibold text-slate-700">{formatQuantityWithUnit(p.stockQuantity, p.unitOfMeasurement)}</td>
                       <td className="py-3.5 px-4 font-mono text-slate-400">{threshold}</td>
                       <td className="py-3.5 px-4">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] leading-none ${

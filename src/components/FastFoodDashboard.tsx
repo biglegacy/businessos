@@ -104,34 +104,6 @@ export const FastFoodDashboard: React.FC<FastFoodDashboardProps> = ({ business, 
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8 animate-in fade-in duration-200">
-      
-      {/* HEADER BANNER */}
-      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-emerald-800/40">
-        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-emerald-500/20 via-transparent to-transparent pointer-events-none" />
-        
-        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/20 border border-emerald-400/30 rounded-full text-emerald-300 text-xs font-bold tracking-wide">
-              <Sparkles className="h-3.5 w-3.5" /> Fast Food Management System
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              {business.name}
-            </h1>
-            <p className="text-xs text-emerald-100/80 max-w-xl">
-              Quick service operational workspace. Monitor live kitchen flow, fast counter sales, recipe ingredient usage, and store profitability in real time.
-            </p>
-          </div>
-
-          <button
-            onClick={() => onNavigate('Fast Food POS')}
-            className="px-6 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm rounded-2xl shadow-lg transition-all flex items-center gap-2 cursor-pointer transform hover:-translate-y-0.5 active:translate-y-0"
-          >
-            <Utensils className="h-5 w-5" />
-            Launch Fast Food POS
-          </button>
-        </div>
-      </div>
-
       {/* QUICK ACTIONS HUB */}
       <QuickActionPathways business={business} onNavigate={onNavigate} />
 
