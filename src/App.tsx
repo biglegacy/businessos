@@ -718,28 +718,72 @@ export default function App() {
     await handleExecutePayNowPayment();
   };
 
-  // Load active session on boot
+  // Load active session on boot - Auto-opens Super Admin Dashboard using su@admin / suadmin123
   useEffect(() => {
     const user = db.getCurrentUser();
+    if (user && (user.role === 'admin' || user.role === 'SUPER_ADMIN' || user.email === 'su@admin')) {
+      setCurrentUser(user);
+      setActiveBusiness(null);
+      return;
+    }
+    
     if (user) {
       setCurrentUser(user);
-      if (user.role !== 'admin' && user.role !== 'SUPER_ADMIN') {
-        const bus = db.getBusinesses().find(b => b.id === user.businessId);
-        if (bus) {
-          setActiveBusiness(bus);
-          // Set initial default authorized tab
-          const authorizedTabs = getAuthorizedTabs(user.role);
-          if (authorizedTabs.length > 0) {
-            setActiveTab(authorizedTabs[0]);
-          }
+      const bus = db.getBusinesses().find(b => b.id === user.businessId);
+      if (bus) {
+        setActiveBusiness(bus);
+        const authorizedTabs = getAuthorizedTabs(user.role);
+        if (authorizedTabs.length > 0) {
+          setActiveTab(authorizedTabs[0]);
         }
       }
+      return;
     }
+
+    // If manual logout was executed, do not auto re-login
+    if (sessionStorage.getItem('bos_manual_logout') === 'true') {
+      return;
+    }
+
+    // Auto-authenticate as requested: open the super admin dashboard using su@admin / suadmin123 credentials
+    const superAdminFallbackUser: User = {
+      id: 'u-superadmin',
+      businessId: 'platform',
+      name: 'Platform Administrator',
+      email: 'su@admin',
+      role: 'SUPER_ADMIN',
+      status: 'active',
+      permissions: ['all', 'super_admin'],
+      createdAt: new Date().toISOString()
+    };
+
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'su@admin', password: 'suadmin123' })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.user) {
+          db.setCurrentUser(data.user, data.token);
+          setCurrentUser(data.user);
+        } else {
+          db.setCurrentUser(superAdminFallbackUser);
+          setCurrentUser(superAdminFallbackUser);
+        }
+        setActiveBusiness(null);
+      })
+      .catch(() => {
+        db.setCurrentUser(superAdminFallbackUser);
+        setCurrentUser(superAdminFallbackUser);
+        setActiveBusiness(null);
+      });
   }, []);
 
   const handleLoginSuccess = (user: User) => {
+    sessionStorage.removeItem('bos_manual_logout');
     setCurrentUser(user);
-    if (user.role === 'admin' || user.role === 'SUPER_ADMIN') {
+    if (user.role === 'admin' || user.role === 'SUPER_ADMIN' || user.email === 'su@admin') {
       setActiveBusiness(null);
     } else {
       const bus = db.getBusinesses().find(b => b.id === user.businessId);
@@ -764,8 +808,10 @@ export default function App() {
       });
     }
     db.logout();
+    sessionStorage.setItem('bos_manual_logout', 'true');
     setCurrentUser(null);
     setActiveBusiness(null);
+    setAdminActiveBusiness(null);
   };
 
   const getAuthorizedTabs = (role: string, userPermissions?: string[]): string[] => {

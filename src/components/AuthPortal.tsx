@@ -1150,20 +1150,41 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAdminLogin(!isAdminLogin);
-                      setEmail('');
-                      setPassword('');
-                      setError('');
-                    }}
-                    className="text-xs font-semibold text-slate-500 hover:text-emerald-600 flex items-center gap-1 cursor-pointer"
-                  >
-                    <Shield className="h-3 w-3" />
-                    {isAdminLogin ? 'Access Business Workspace' : 'Platform Controller Login'}
-                  </button>
+                <div className="flex flex-col gap-2 border-t border-slate-100 pt-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isAdminLogin;
+                        setIsAdminLogin(next);
+                        if (next) {
+                          setEmail('su@admin');
+                          setPassword('suadmin123');
+                        } else {
+                          setEmail('');
+                          setPassword('');
+                        }
+                        setError('');
+                      }}
+                      className="text-xs font-semibold text-slate-500 hover:text-emerald-600 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Shield className="h-3 w-3" />
+                      {isAdminLogin ? 'Access Business Workspace' : 'Platform Controller Login'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAdminLogin(true);
+                        setEmail('su@admin');
+                        setPassword('suadmin123');
+                        setError('');
+                      }}
+                      className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition border border-emerald-200 cursor-pointer"
+                    >
+                      Fill Super Admin (su@admin)
+                    </button>
+                  </div>
                 </div>
 
                 <button
