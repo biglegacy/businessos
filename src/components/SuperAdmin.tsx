@@ -8,7 +8,7 @@ import { db } from '../lib/db';
 import { firestore, doc, getDoc, deleteDoc } from '../lib/firebase';
 import { User, Business, PaystackSettings, GlobalSystemConfig, REQUIRED_BUSINESS_TYPES, BusinessPopupPrompt, SmsTimingDetails } from '../types';
 import { 
-  Building, Users, Shield, CheckCircle2, AlertTriangle, Trash2, 
+  Building, Users, Shield, CheckCircle2, AlertTriangle, AlertCircle, Trash2, 
   Search, Plus, X, Edit, RotateCcw, Activity, LogOut, Lock, Eye, EyeOff,
   Sliders, CreditCard, Key, Globe, Database, Upload, Download, RefreshCw,
   Settings, Check, Zap, Server, FileText, Bell, GraduationCap, Menu,
@@ -822,7 +822,10 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
   const [busStockTransferEnabled, setBusStockTransferEnabled] = useState(false);
   const [busCurrency, setBusCurrency] = useState('GHC');
   const [busSubscriptionAmount, setBusSubscriptionAmount] = useState('299');
-  const [regBusPassword, setRegBusPassword] = useState('');
+  const [regBusPassword, setRegBusPassword] = useState('Business@2026!');
+  const [showRegPassword, setShowRegPassword] = useState(false);
+  const [isSubmittingReg, setIsSubmittingReg] = useState(false);
+  const [regBusError, setRegBusError] = useState<string | null>(null);
 
   // --- Form States for User Creation / Password Reset ---
   const [newUserBusId, setNewUserBusId] = useState('');
@@ -1028,77 +1031,124 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setBusTrialDays('30');
     setBusStockTransferEnabled(false);
     setBusCurrency(sysConfigState.defaultCurrency || 'GHC');
-    setRegBusPassword('');
+    setBusSubscriptionAmount(String(sysConfigState.defaultSubscriptionAmount || '299'));
+    setRegBusPassword('Business@2026!');
+    setShowRegPassword(false);
+    setRegBusError(null);
+    setIsSubmittingReg(false);
     setRegisteringBusiness(true);
   };
 
   const handleRegisterBusinessSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!busName || !busOwner || !busEmail || !busPhone) {
-      alert('Please complete all mandatory business registration fields.');
+    setRegBusError(null);
+
+    const trimmedName = busName.trim();
+    const trimmedOwner = busOwner.trim();
+    const trimmedEmail = busEmail.trim().toLowerCase();
+    const trimmedPhone = busPhone.trim();
+
+    if (!trimmedName || !trimmedOwner || !trimmedEmail || !trimmedPhone) {
+      setRegBusError('Please complete all required fields: Business Name, Owner Name, Email, and Phone.');
       return;
     }
 
-    if (!regBusPassword || regBusPassword.length < 8) {
-      alert('Owner initial password must be at least 8 characters long.');
+    if (!trimmedEmail.includes('@') || !trimmedEmail.includes('.')) {
+      setRegBusError('Please enter a valid owner email address (e.g. owner@domain.com).');
       return;
     }
 
-    const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
-    const now = new Date();
-    const trialDaysNum = parseInt(busTrialDays, 10) || 30;
-    const trialEnd = new Date(now);
-    trialEnd.setDate(now.getDate() + trialDaysNum);
+    const passwordToUse = (regBusPassword || '').trim() || 'Business@2026!';
+    if (passwordToUse.length < 8) {
+      setRegBusError('Owner account password must be at least 8 characters long.');
+      return;
+    }
 
-    const newBusiness: Business = {
-      id: busId,
-      name: busName,
-      ownerName: busOwner,
-      email: busEmail,
-      phone: busPhone,
-      category: busCategory,
-      createdAt: now.toISOString(),
-      registrationDate: now.toISOString(),
-      trialEndDate: trialEnd.toISOString(),
-      subscriptionStatus: busSubStatus,
-      subscriptionAmount: Number(busSubscriptionAmount) || sysConfigState.defaultSubscriptionAmount || 299,
-      status: 'active',
-      currency: busCurrency,
-      isStockTransferEnabled: busStockTransferEnabled,
-      receiptConfig: {
-        businessName: busName,
-        contactInfo: busPhone,
-        footerMessage: 'Thank you for your patronage!',
-        layout: 'standard'
-      }
-    };
+    // Check if email is already in use by another user
+    const existingUsers = db.getUsers();
+    if (existingUsers.some(u => u && u.email && u.email.toLowerCase() === trimmedEmail)) {
+      setRegBusError(`An account with email "${trimmedEmail}" already exists. Please specify a unique email.`);
+      return;
+    }
 
-    db.saveBusiness(newBusiness);
+    setIsSubmittingReg(true);
 
-    // Register primary owner account with hashed password
-    const hashedPass = await hashPassword(regBusPassword);
-    const ownerUser: User = {
-      id: 'u-' + Math.random().toString(36).substring(2, 9),
-      businessId: busId,
-      name: busOwner,
-      email: busEmail,
-      role: 'owner',
-      status: 'active',
-      password: hashedPass,
-      createdAt: now.toISOString()
-    };
-    db.saveUser(ownerUser);
+    try {
+      const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
+      const now = new Date();
+      const trialDaysNum = parseInt(busTrialDays, 10) || 30;
+      const trialEnd = new Date(now);
+      trialEnd.setDate(now.getDate() + trialDaysNum);
 
-    db.addActivityLog(busId, {
-      userId: 'system',
-      userName: 'Super Admin',
-      action: 'Business Registered',
-      details: `Registered new business tenant "${busName}" with owner ${busOwner}.`
-    });
+      const newBusiness: Business = {
+        id: busId,
+        name: trimmedName,
+        ownerName: trimmedOwner,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        category: busCategory || sysConfigState.allowedBusinessTypes[0] || 'General Enterprise',
+        createdAt: now.toISOString(),
+        registrationDate: now.toISOString(),
+        trialEndDate: trialEnd.toISOString(),
+        subscriptionStatus: busSubStatus,
+        subscriptionAmount: Number(busSubscriptionAmount) || sysConfigState.defaultSubscriptionAmount || 299,
+        status: 'active',
+        currency: busCurrency || sysConfigState.defaultCurrency || 'GHC',
+        isStockTransferEnabled: busStockTransferEnabled,
+        receiptConfig: {
+          businessName: trimmedName,
+          contactInfo: trimmedPhone,
+          footerMessage: 'Thank you for your patronage!',
+          layout: 'standard'
+        }
+      };
 
-    alert(`Business "${busName}" registered successfully! Owner account created (${busEmail}).`);
-    setRegisteringBusiness(false);
-    forceUpdate();
+      // 1. Persist business to local database & cloud
+      db.saveBusiness(newBusiness);
+
+      // 2. Register primary owner account with hashed password
+      const hashedPass = await hashPassword(passwordToUse);
+      const ownerUser: User = {
+        id: 'u-' + Math.random().toString(36).substring(2, 9),
+        businessId: busId,
+        name: trimmedOwner,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        role: 'owner',
+        status: 'active',
+        password: hashedPass,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+      db.saveUser(ownerUser);
+
+      // 3. Record super admin activity log
+      db.addActivityLog(busId, {
+        userId: 'system',
+        userName: 'Super Admin',
+        action: 'Business Registered',
+        details: `Registered new business tenant "${trimmedName}" with owner ${trimmedOwner}.`
+      });
+
+      // 4. Optimistically update reactive list in SuperAdmin view
+      setFirestoreBusinesses(prev => [newBusiness, ...prev.filter(b => b.id !== busId)]);
+
+      // 5. Success toast in UI (NO window.alert)
+      setBulkSmsFeedback({
+        type: 'success',
+        text: `Workspace "${trimmedName}" registered successfully! Owner account created (${trimmedEmail}).`
+      });
+      setTimeout(() => setBulkSmsFeedback(null), 4000);
+
+      // 6. Close modal & clear loading
+      setRegisteringBusiness(false);
+      setIsSubmittingReg(false);
+      forceUpdate();
+    } catch (err: any) {
+      console.error('Error in handleRegisterBusinessSubmit:', err);
+      setRegBusError(err.message || 'Failed to complete business workspace registration. Please retry.');
+      setIsSubmittingReg(false);
+    }
   };
 
   const handleEditBusinessClick = (bus: Business) => {
@@ -4228,6 +4278,13 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
               </button>
             </div>
 
+            {regBusError && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-semibold flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+                <span className="leading-tight">{regBusError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleRegisterBusinessSubmit} className="space-y-4 mt-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -4300,7 +4357,7 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                     onChange={(e) => setBusSubStatus(e.target.value as any)}
                     className="w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 outline-none cursor-pointer"
                   >
-                    <option value="trial">Free Trial</option>
+                    <option value="trial">Free Trial (30 Days)</option>
                     <option value="active">Active Subscription</option>
                     <option value="suspended">Suspended</option>
                   </select>
@@ -4309,15 +4366,35 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Owner Account Password</label>
-                  <input
-                    type="password"
-                    required
-                    value={regBusPassword}
-                    onChange={(e) => setRegBusPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 focus:ring-1 focus:ring-emerald-500 outline-none font-mono"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase">Owner Password</label>
+                    <button
+                      type="button"
+                      onClick={() => setRegBusPassword('Biz_' + Math.random().toString(36).substring(2, 8) + '2026!')}
+                      className="text-[10px] text-emerald-700 hover:text-emerald-800 font-bold underline cursor-pointer"
+                      title="Generate Secure Password"
+                    >
+                      Generate
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showRegPassword ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      value={regBusPassword}
+                      onChange={(e) => setRegBusPassword(e.target.value)}
+                      placeholder="Min. 8 characters"
+                      className="w-full pl-3 pr-8 py-2 border border-slate-200 rounded-xl text-slate-800 focus:ring-1 focus:ring-emerald-500 outline-none font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowRegPassword(!showRegPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      {showRegPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div>
@@ -4358,9 +4435,17 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-[#064E3B] hover:bg-[#032e23] text-white rounded-xl font-bold shadow cursor-pointer"
+                  disabled={isSubmittingReg}
+                  className="px-5 py-2 bg-[#064E3B] hover:bg-[#032e23] disabled:opacity-60 text-white rounded-xl font-bold shadow cursor-pointer flex items-center gap-2"
                 >
-                  Register Business Workspace
+                  {isSubmittingReg ? (
+                    <>
+                      <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Registering Workspace...</span>
+                    </>
+                  ) : (
+                    <span>Register Business Workspace</span>
+                  )}
                 </button>
               </div>
             </form>

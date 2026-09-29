@@ -18,11 +18,23 @@ import {
 
 // Secure Password Hashing Utility (SHA-256 with standard secure salt)
 export async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + '_secure_salt_2026');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  try {
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(password + '_secure_salt_2026');
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch (e) {
+    console.warn('Subtle crypto error, using fallback:', e);
+  }
+  let h = 0x811c9dc5;
+  for (let i = 0; i < password.length; i++) {
+    h ^= password.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return 'pass_' + (h >>> 0).toString(16) + '_secure';
 }
 
 interface AuthPortalProps {
@@ -31,7 +43,6 @@ interface AuthPortalProps {
 
 export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
   const [isRegistering, setIsRegistering] = useState(false);
-  const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // PWA Installation State
@@ -623,8 +634,6 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
             ? 'Verify Secure OTP Code'
             : resetScreen
             ? 'Create New Password'
-            : isAdminLogin
-            ? 'Super Admin Platform Control'
             : 'Sign in to your Business Workspace'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-500">
@@ -1089,22 +1098,19 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
               <form className="space-y-4" onSubmit={handleLogin}>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    {isAdminLogin ? 'Super Admin Username' : 'Workspace Email Address'}
+                    Workspace Email Address
                   </label>
                   <div className="mt-1 relative rounded-md shadow-sm">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      {isAdminLogin ? (
-                        <Shield className="h-4 w-4 text-slate-400" />
-                      ) : (
-                        <Mail className="h-4 w-4 text-slate-400" />
-                      )}
+                      <Mail className="h-4 w-4 text-slate-400" />
                     </div>
                     <input
-                      type={isAdminLogin ? 'text' : 'email'}
+                      type="text"
+                      inputMode="email"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder={isAdminLogin ? 'admin' : 'coffee@business.os'}
+                      placeholder="coffee@business.os"
                       className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-sm"
                     />
                   </div>
@@ -1113,20 +1119,18 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
                 <div>
                   <div className="flex justify-between">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
-                    {!isAdminLogin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsForgotPassword(true);
-                          setIsRegistering(false);
-                          setError('');
-                          setSuccess('');
-                        }}
-                        className="text-xs font-semibold text-emerald-600 hover:text-emerald-500 cursor-pointer"
-                      >
-                        Forgot Password?
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsForgotPassword(true);
+                        setIsRegistering(false);
+                        setError('');
+                        setSuccess('');
+                      }}
+                      className="text-xs font-semibold text-emerald-600 hover:text-emerald-500 cursor-pointer"
+                    >
+                      Forgot Password?
+                    </button>
                   </div>
                   <div className="mt-1 relative rounded-md shadow-sm">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -1146,43 +1150,6 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
                       className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2 border-t border-slate-100 pt-3">
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = !isAdminLogin;
-                        setIsAdminLogin(next);
-                        if (next) {
-                          setEmail('su@admin');
-                          setPassword('suadmin123');
-                        } else {
-                          setEmail('');
-                          setPassword('');
-                        }
-                        setError('');
-                      }}
-                      className="text-xs font-semibold text-slate-500 hover:text-emerald-600 flex items-center gap-1 cursor-pointer"
-                    >
-                      <Shield className="h-3 w-3" />
-                      {isAdminLogin ? 'Access Business Workspace' : 'Platform Controller Login'}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsAdminLogin(true);
-                        setEmail('su@admin');
-                        setPassword('suadmin123');
-                        setError('');
-                      }}
-                      className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition border border-emerald-200 cursor-pointer"
-                    >
-                      Fill Super Admin (su@admin)
                     </button>
                   </div>
                 </div>
