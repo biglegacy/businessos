@@ -156,6 +156,24 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
     const matched = users.find(u => u && u.email && u.email.toLowerCase() === email);
     if (matched) {
       const token = 'cf_sess_' + Math.random().toString(36).substring(2) + Date.now();
+      const businesses: any[] = globalThis.__workerStore?.businesses || [];
+      let matchedBusiness = businesses.find(b => b && b.id === matched.businessId);
+      if (!matchedBusiness && matched.businessId && matched.businessId !== 'platform') {
+        matchedBusiness = {
+          id: matched.businessId,
+          name: matched.name ? `${matched.name}'s Workspace` : 'Business Workspace',
+          ownerName: matched.name || 'Business Owner',
+          email: matched.email,
+          phone: '',
+          category: 'General Enterprise',
+          status: 'active',
+          subscriptionStatus: 'trial',
+          subscriptionAmount: 299,
+          currency: 'GHC',
+          createdAt: new Date().toISOString()
+        };
+        if (globalThis.__workerStore) globalThis.__workerStore.businesses.push(matchedBusiness);
+      }
       return jsonResponse({
         success: true,
         message: 'Signed in successfully.',
@@ -167,13 +185,30 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
           role: matched.role || 'staff',
           businessId: matched.businessId || 'default',
           status: matched.status || 'active'
-        }
+        },
+        business: matchedBusiness || null
       });
     }
 
     // Default friendly login acknowledgment for demo/sandbox environments
     if (email && password) {
       const token = 'cf_sess_' + Math.random().toString(36).substring(2) + Date.now();
+      const generatedBusId = 'bus-' + Math.random().toString(36).substring(2, 8);
+      const demoBusiness = {
+        id: generatedBusId,
+        name: `${email.split('@')[0] || 'My'} Business Workspace`,
+        ownerName: email.split('@')[0] || 'User',
+        email,
+        phone: '',
+        category: 'General Enterprise',
+        status: 'active',
+        subscriptionStatus: 'trial',
+        subscriptionAmount: 299,
+        currency: 'GHC',
+        createdAt: new Date().toISOString()
+      };
+      if (globalThis.__workerStore) globalThis.__workerStore.businesses.push(demoBusiness);
+
       return jsonResponse({
         success: true,
         message: 'Authenticated successfully.',
@@ -183,9 +218,10 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
           email,
           name: email.split('@')[0] || 'User',
           role: 'owner',
-          businessId: 'bus-' + Math.random().toString(36).substring(2, 8),
+          businessId: generatedBusId,
           status: 'active'
-        }
+        },
+        business: demoBusiness
       });
     }
 
@@ -261,11 +297,100 @@ export async function handleApi(request: Request, env: WorkerEnv): Promise<Respo
   }
 
   // 6. Admin Businesses List
-  if (path === '/api/admin/businesses' && method === 'GET') {
+  if ((path === '/api/admin/businesses' || path === '/api/businesses') && method === 'GET') {
     return jsonResponse({
       success: true,
       businesses: globalThis.__workerStore?.businesses || []
     });
+  }
+
+  // 6.1 Single Business Workspace Retrieval
+  if (path.startsWith('/api/business/') && !path.includes('/pricing') && !path.includes('/popup-prompts') && method === 'GET') {
+    const businessId = path.split('/')[3];
+    const businesses: any[] = globalThis.__workerStore?.businesses || [];
+    let business = businesses.find((b: any) => b && (b.id === businessId || b._id === businessId));
+    if (!business) {
+      const users: any[] = globalThis.__workerStore?.users || [];
+      const user = users.find((u: any) => u && (u.businessId === businessId || u.schoolId === businessId));
+      if (user) {
+        business = {
+          id: businessId,
+          name: user.name ? `${user.name}'s Workspace` : 'Business Workspace',
+          ownerName: user.name || 'Business Owner',
+          email: user.email || '',
+          phone: '',
+          category: 'General Enterprise',
+          status: 'active',
+          subscriptionStatus: 'trial',
+          subscriptionAmount: 299,
+          currency: 'GHC',
+          createdAt: new Date().toISOString()
+        };
+        if (globalThis.__workerStore) globalThis.__workerStore.businesses.push(business);
+      }
+    }
+    if (business) {
+      return jsonResponse({ success: true, business });
+    }
+    return jsonResponse({ success: false, error: 'Business workspace not found' }, 404);
+  }
+
+  // 6.2 Admin Register Business Endpoint
+  if (path === '/api/admin/register-business' && method === 'POST') {
+    const body = await readJsonBody(request);
+    const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
+    const userId = 'u-' + Math.random().toString(36).substring(2, 9);
+    const nowIso = new Date().toISOString();
+    const trialDays = parseInt(body.trialDays, 10) || 30;
+    const trialEnd = new Date(Date.now() + trialDays * 86400000).toISOString();
+
+    const newBusiness = {
+      id: busId,
+      name: String(body.businessName || 'New Workspace').trim(),
+      ownerName: String(body.ownerName || 'Business Owner').trim(),
+      email: String(body.email || '').trim().toLowerCase(),
+      phone: String(body.phone || '').trim(),
+      category: String(body.category || 'General Enterprise').trim(),
+      businessType: String(body.category || 'General Enterprise').trim(),
+      status: 'active',
+      createdAt: nowIso,
+      registrationDate: nowIso,
+      trialEndDate: trialEnd,
+      subscriptionStatus: body.subscriptionStatus || 'trial',
+      subscriptionAmount: Number(body.subscriptionAmount) || 299,
+      currency: body.currency || 'GHC',
+      isStockTransferEnabled: Boolean(body.isStockTransferEnabled),
+      enabledFeatures: ['sales', 'inventory', 'customers', 'suppliers', 'reports', 'restaurant'],
+      receiptConfig: {
+        businessName: String(body.businessName || 'New Workspace').trim(),
+        contactInfo: String(body.phone || '').trim(),
+        footerMessage: 'Thank you for your patronage!',
+        layout: 'standard'
+      }
+    };
+
+    const newOwner = {
+      id: userId,
+      businessId: busId,
+      name: String(body.ownerName || 'Business Owner').trim(),
+      email: String(body.email || '').trim().toLowerCase(),
+      phone: String(body.phone || '').trim(),
+      role: 'owner',
+      status: 'active',
+      createdAt: nowIso
+    };
+
+    if (globalThis.__workerStore) {
+      globalThis.__workerStore.businesses.unshift(newBusiness);
+      globalThis.__workerStore.users.unshift(newOwner);
+    }
+
+    return jsonResponse({
+      success: true,
+      message: 'Business workspace registered successfully.',
+      business: newBusiness,
+      user: newOwner
+    }, 201);
   }
 
   // 7. Admin Business Update / Create

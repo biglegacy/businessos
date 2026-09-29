@@ -1472,6 +1472,104 @@ class CloudDatabase {
     return this.loadAuthoritativeBusinesses();
   }
 
+  // Authoritative Single Business Resolver for Tenant Workspace Initialization
+  public async resolveBusiness(businessId: string): Promise<Business | null> {
+    if (!businessId || businessId === 'platform') return null;
+
+    // Clear from deleted tombstones if it exists so newly created businesses are never hidden
+    try {
+      const raw = safeStorageGetItem('bos_deleted_business_ids');
+      if (raw) {
+        let deletedIds: string[] = JSON.parse(raw) || [];
+        if (deletedIds.includes(businessId)) {
+          deletedIds = deletedIds.filter(id => id !== businessId);
+          safeStorageSetItem('bos_deleted_business_ids', JSON.stringify(deletedIds));
+        }
+      }
+    } catch {}
+
+    // 1. Check local cache
+    const local = this.getBusinesses().find(b => b.id === businessId || (b as any)._id === businessId);
+    if (local) return local;
+
+    // 2. Query dedicated server endpoint /api/business/:businessId
+    try {
+      const res = await fetch(`/api/business/${encodeURIComponent(businessId)}`, {
+        headers: this.getAuthHeaders()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.business) {
+          this.saveBusiness(data.business);
+          return data.business;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend resolveBusiness endpoint note:', e);
+    }
+
+    // 3. Query Firestore directly for the specific business document
+    try {
+      const snap = await getDoc(doc(firestore, 'bos_businesses', businessId));
+      if (snap.exists()) {
+        const bus = { id: snap.id, ...snap.data() } as Business;
+        this.saveBusiness(bus);
+        return bus;
+      }
+    } catch (e) {
+      console.warn('Direct Firestore resolveBusiness note:', e);
+    }
+
+    // 4. Fallback: Query authoritative list (/api/businesses or Firestore)
+    try {
+      const all = await this.loadAuthoritativeBusinesses();
+      const found = all.find(b => b.id === businessId || (b as any)._id === businessId);
+      if (found) {
+        this.saveBusiness(found);
+        return found;
+      }
+    } catch (e) {}
+
+    // 5. Fallback: Pull from cloud sync
+    try {
+      await this.pullFromCloud();
+      const synced = this.getBusinesses().find(b => b.id === businessId || (b as any)._id === businessId);
+      if (synced) return synced;
+    } catch (e) {}
+
+    // 6. Safe Resilience Fallback: Construct active tenant business from logged-in user profile
+    const currentUser = this.getCurrentUser();
+    if (currentUser && currentUser.businessId === businessId) {
+      const fallbackBus: Business = {
+        id: businessId,
+        name: currentUser.name ? `${currentUser.name}'s Workspace` : 'Business Workspace',
+        ownerName: currentUser.name || 'Business Owner',
+        email: currentUser.email || '',
+        phone: currentUser.phone || '',
+        category: 'General Enterprise',
+        businessType: 'General Enterprise',
+        status: 'active',
+        subscriptionStatus: 'trial',
+        subscriptionAmount: 299,
+        currency: 'GHC',
+        createdAt: new Date().toISOString(),
+        registrationDate: new Date().toISOString(),
+        trialEndDate: new Date(Date.now() + 30 * 86400000).toISOString(),
+        enabledFeatures: ['sales', 'inventory', 'customers', 'suppliers', 'reports', 'restaurant'],
+        receiptConfig: {
+          businessName: currentUser.name ? `${currentUser.name}'s Workspace` : 'Business Workspace',
+          contactInfo: currentUser.phone || '',
+          footerMessage: 'Thank you for your business!',
+          layout: 'standard'
+        }
+      };
+      this.saveBusiness(fallbackBus);
+      return fallbackBus;
+    }
+
+    return null;
+  }
+
   public syncBusinessesFromFirestore(businesses: Business[]): void {
     let deletedIds: string[] = [];
     try {

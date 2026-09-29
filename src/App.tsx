@@ -122,6 +122,7 @@ export default function App() {
     }
   };
   const [activeTab, setActiveTab] = useState<string>('Dashboard');
+  const [isResolvingTenant, setIsResolvingTenant] = useState<boolean>(false);
   const [featureTrigger, setFeatureTrigger] = useState(0);
   const [selectedBranchId, setSelectedBranchId] = useState<string>('All');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -729,13 +730,28 @@ export default function App() {
     
     if (user) {
       setCurrentUser(user);
-      const bus = db.getBusinesses().find(b => b.id === user.businessId);
+      const bus = db.getBusinesses().find(b => b.id === user.businessId || (b as any)._id === user.businessId);
       if (bus) {
         setActiveBusiness(bus);
         const authorizedTabs = getAuthorizedTabs(user.role);
         if (authorizedTabs.length > 0) {
           setActiveTab(authorizedTabs[0]);
         }
+      } else if (user.businessId && user.businessId !== 'platform') {
+        setIsResolvingTenant(true);
+        db.resolveBusiness(user.businessId)
+          .then(resolved => {
+            if (resolved) {
+              setActiveBusiness(resolved);
+              const authorizedTabs = getAuthorizedTabs(user.role);
+              if (authorizedTabs.length > 0) {
+                setActiveTab(authorizedTabs[0]);
+              }
+            }
+          })
+          .finally(() => {
+            setIsResolvingTenant(false);
+          });
       }
       return;
     }
@@ -780,19 +796,48 @@ export default function App() {
       });
   }, []);
 
-  const handleLoginSuccess = (user: User) => {
+  const handleLoginSuccess = async (user: User, business?: Business | null) => {
     sessionStorage.removeItem('bos_manual_logout');
     setCurrentUser(user);
     if (user.role === 'admin' || user.role === 'SUPER_ADMIN' || user.email === 'su@admin') {
       setActiveBusiness(null);
     } else {
-      const bus = db.getBusinesses().find(b => b.id === user.businessId);
-      if (bus) {
-        setActiveBusiness(bus);
-        // Default authorized tab redirect
+      // 1. Explicit business passed directly from login or registration response
+      if (business && business.id) {
+        db.saveBusiness(business);
+        setActiveBusiness(business);
         const authorizedTabs = getAuthorizedTabs(user.role);
         if (authorizedTabs.length > 0) {
           setActiveTab(authorizedTabs[0]);
+        }
+        return;
+      }
+
+      // 2. Check local database
+      const bus = db.getBusinesses().find(b => b.id === user.businessId || (b as any)._id === user.businessId);
+      if (bus) {
+        setActiveBusiness(bus);
+        const authorizedTabs = getAuthorizedTabs(user.role);
+        if (authorizedTabs.length > 0) {
+          setActiveTab(authorizedTabs[0]);
+        }
+        return;
+      }
+
+      // 3. Proactively resolve from cloud database
+      if (user.businessId && user.businessId !== 'platform') {
+        setIsResolvingTenant(true);
+        try {
+          const resolved = await db.resolveBusiness(user.businessId);
+          if (resolved) {
+            setActiveBusiness(resolved);
+            const authorizedTabs = getAuthorizedTabs(user.role);
+            if (authorizedTabs.length > 0) {
+              setActiveTab(authorizedTabs[0]);
+            }
+          }
+        } finally {
+          setIsResolvingTenant(false);
         }
       }
     }
@@ -1206,16 +1251,47 @@ export default function App() {
     );
   }
 
+  if (isResolvingTenant) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 font-sans text-center p-6">
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xl max-w-sm space-y-4">
+          <RefreshCw className="h-10 w-10 text-emerald-600 animate-spin mx-auto" />
+          <h3 className="font-extrabold text-slate-800 text-lg">Initializing Workspace</h3>
+          <p className="text-xs text-slate-500 leading-normal">Connecting to your verified business database and synchronizing tenant workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeBusiness) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 font-sans text-center p-6">
-        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xl max-w-sm space-y-4">
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xl max-w-sm space-y-4">
           <FolderLock className="h-12 w-12 text-rose-600 mx-auto" />
           <h3 className="font-extrabold text-slate-800 text-lg">Tenant Isolation Fault</h3>
           <p className="text-xs text-slate-500 leading-normal">Your assigned Business ID reference was not matched on our secure cloud database. Please verify with platform administrators.</p>
-          <button onClick={handleLogout} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-semibold cursor-pointer">
-            Sign Out
-          </button>
+          <div className="flex flex-col gap-2 pt-2">
+            <button
+              onClick={async () => {
+                if (currentUser?.businessId) {
+                  setIsResolvingTenant(true);
+                  try {
+                    const res = await db.resolveBusiness(currentUser.businessId);
+                    if (res) setActiveBusiness(res);
+                  } finally {
+                    setIsResolvingTenant(false);
+                  }
+                }
+              }}
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Reconnect Business Workspace
+            </button>
+            <button onClick={handleLogout} className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer">
+              Sign Out
+            </button>
+          </div>
         </div>
       </div>
     );

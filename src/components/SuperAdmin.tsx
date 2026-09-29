@@ -1074,73 +1074,109 @@ export function SuperAdmin({ onLogout, onManageBusiness }: SuperAdminProps) {
     setIsSubmittingReg(true);
 
     try {
-      const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
-      const now = new Date();
-      const trialDaysNum = parseInt(busTrialDays, 10) || 30;
-      const trialEnd = new Date(now);
-      trialEnd.setDate(now.getDate() + trialDaysNum);
+      let registeredBusiness: Business | null = null;
+      let registeredOwner: User | null = null;
 
-      const newBusiness: Business = {
-        id: busId,
-        name: trimmedName,
-        ownerName: trimmedOwner,
-        email: trimmedEmail,
-        phone: trimmedPhone,
-        category: busCategory || sysConfigState.allowedBusinessTypes[0] || 'General Enterprise',
-        createdAt: now.toISOString(),
-        registrationDate: now.toISOString(),
-        trialEndDate: trialEnd.toISOString(),
-        subscriptionStatus: busSubStatus,
-        subscriptionAmount: Number(busSubscriptionAmount) || sysConfigState.defaultSubscriptionAmount || 299,
-        status: 'active',
-        currency: busCurrency || sysConfigState.defaultCurrency || 'GHC',
-        isStockTransferEnabled: busStockTransferEnabled,
-        receiptConfig: {
-          businessName: trimmedName,
-          contactInfo: trimmedPhone,
-          footerMessage: 'Thank you for your patronage!',
-          layout: 'standard'
+      // 1. Attempt authoritative backend registration for atomic persistence & PBKDF2 hashing
+      try {
+        const resp = await fetch('/api/admin/register-business', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...db.getAuthHeaders() },
+          body: JSON.stringify({
+            businessName: trimmedName,
+            ownerName: trimmedOwner,
+            email: trimmedEmail,
+            phone: trimmedPhone,
+            category: busCategory || sysConfigState.allowedBusinessTypes[0] || 'General Enterprise',
+            password: passwordToUse,
+            subscriptionStatus: busSubStatus,
+            subscriptionAmount: Number(busSubscriptionAmount) || sysConfigState.defaultSubscriptionAmount || 299,
+            currency: busCurrency || sysConfigState.defaultCurrency || 'GHC',
+            trialDays: parseInt(busTrialDays, 10) || 30,
+            isStockTransferEnabled: busStockTransferEnabled
+          })
+        });
+
+        if (resp.ok) {
+          const resData = await resp.json();
+          if (resData.success && resData.business && resData.user) {
+            registeredBusiness = resData.business;
+            registeredOwner = resData.user;
+          }
         }
-      };
+      } catch (netErr) {
+        console.warn('Backend business registration endpoint note, using resilient local provisioning:', netErr);
+      }
 
-      // 1. Persist business to local database & cloud
-      db.saveBusiness(newBusiness);
+      // 2. Resilient local fallback if backend was unavailable
+      if (!registeredBusiness || !registeredOwner) {
+        const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
+        const now = new Date();
+        const trialDaysNum = parseInt(busTrialDays, 10) || 30;
+        const trialEnd = new Date(now);
+        trialEnd.setDate(now.getDate() + trialDaysNum);
 
-      // 2. Register primary owner account with hashed password
-      const hashedPass = await hashPassword(passwordToUse);
-      const ownerUser: User = {
-        id: 'u-' + Math.random().toString(36).substring(2, 9),
-        businessId: busId,
-        name: trimmedOwner,
-        email: trimmedEmail,
-        phone: trimmedPhone,
-        role: 'owner',
-        status: 'active',
-        password: hashedPass,
-        createdAt: now.toISOString(),
-        updatedAt: now.toISOString()
-      };
-      db.saveUser(ownerUser);
+        registeredBusiness = {
+          id: busId,
+          name: trimmedName,
+          ownerName: trimmedOwner,
+          email: trimmedEmail,
+          phone: trimmedPhone,
+          category: busCategory || sysConfigState.allowedBusinessTypes[0] || 'General Enterprise',
+          createdAt: now.toISOString(),
+          registrationDate: now.toISOString(),
+          trialEndDate: trialEnd.toISOString(),
+          subscriptionStatus: busSubStatus,
+          subscriptionAmount: Number(busSubscriptionAmount) || sysConfigState.defaultSubscriptionAmount || 299,
+          status: 'active',
+          currency: busCurrency || sysConfigState.defaultCurrency || 'GHC',
+          isStockTransferEnabled: busStockTransferEnabled,
+          receiptConfig: {
+            businessName: trimmedName,
+            contactInfo: trimmedPhone,
+            footerMessage: 'Thank you for your patronage!',
+            layout: 'standard'
+          }
+        };
 
-      // 3. Record super admin activity log
-      db.addActivityLog(busId, {
+        const hashedPass = await hashPassword(passwordToUse);
+        registeredOwner = {
+          id: 'u-' + Math.random().toString(36).substring(2, 9),
+          businessId: busId,
+          name: trimmedOwner,
+          email: trimmedEmail,
+          phone: trimmedPhone,
+          role: 'owner',
+          status: 'active',
+          password: hashedPass,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        };
+      }
+
+      // 3. Persist business & owner to database
+      db.saveBusiness(registeredBusiness);
+      db.saveUser(registeredOwner);
+
+      // 4. Record super admin activity log
+      db.addActivityLog(registeredBusiness.id, {
         userId: 'system',
         userName: 'Super Admin',
         action: 'Business Registered',
         details: `Registered new business tenant "${trimmedName}" with owner ${trimmedOwner}.`
       });
 
-      // 4. Optimistically update reactive list in SuperAdmin view
-      setFirestoreBusinesses(prev => [newBusiness, ...prev.filter(b => b.id !== busId)]);
+      // 5. Optimistically update reactive list in SuperAdmin view
+      setFirestoreBusinesses(prev => [registeredBusiness!, ...prev.filter(b => b.id !== registeredBusiness!.id)]);
 
-      // 5. Success toast in UI (NO window.alert)
+      // 6. Success toast in UI (NO window.alert)
       setBulkSmsFeedback({
         type: 'success',
         text: `Workspace "${trimmedName}" registered successfully! Owner account created (${trimmedEmail}).`
       });
       setTimeout(() => setBulkSmsFeedback(null), 4000);
 
-      // 6. Close modal & clear loading
+      // 7. Close modal & clear loading
       setRegisteringBusiness(false);
       setIsSubmittingReg(false);
       forceUpdate();

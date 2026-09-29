@@ -114,14 +114,39 @@ function readDatabase(): Record<string, any[]> {
           }
         });
       }
+
+      // Auto-heal missing business references for valid registered users so users and businesses are never orphaned
       if (Array.isArray(data['bos_users'])) {
-        data['bos_users'] = data['bos_users'].filter((u: any) => {
-          if (!u) return false;
-          if (u.role === 'admin') return true;
-          if (!u.businessId && !u.schoolId) return true;
-          return (u.businessId && activeBusIds.has(u.businessId)) || (u.schoolId && activeBusIds.has(u.schoolId));
+        const busList: any[] = Array.isArray(data['bos_businesses']) ? data['bos_businesses'] : [];
+        const busMap = new Map<string, any>(busList.map((b: any) => [b.id, b]));
+        data['bos_users'].forEach((u: any) => {
+          if (!u || !u.businessId || u.businessId === 'platform' || deletedIds.has(u.businessId)) return;
+          if (!busMap.has(u.businessId)) {
+            const healedBus = {
+              id: u.businessId,
+              name: u.name ? `${u.name}'s Workspace` : 'Business Workspace',
+              ownerName: u.name || 'Business Owner',
+              email: u.email || '',
+              phone: u.phone || '',
+              category: 'General Enterprise',
+              businessType: 'General Enterprise',
+              status: 'active',
+              subscriptionStatus: 'trial',
+              subscriptionAmount: 299,
+              currency: 'GHC',
+              createdAt: u.createdAt || new Date().toISOString(),
+              registrationDate: u.createdAt || new Date().toISOString(),
+              trialEndDate: new Date(Date.now() + 30 * 86400000).toISOString(),
+              enabledFeatures: ['sales', 'inventory', 'customers', 'suppliers', 'reports', 'restaurant']
+            };
+            busList.push(healedBus);
+            busMap.set(u.businessId, healedBus);
+            activeBusIds.add(u.businessId);
+          }
         });
+        data['bos_businesses'] = busList;
       }
+
       return data;
     }
   } catch (e) {
@@ -271,6 +296,16 @@ function hashPasswordPbkdf2(password: string, salt?: string): { hash: string; sa
   return { hash: derived.toString('hex'), salt: usedSalt };
 }
 
+// Client-compatible FNV-1a password hash helper
+function fnv1aClientHash(password: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < password.length; i++) {
+    h ^= password.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return 'pass_' + (h >>> 0).toString(16) + '_secure';
+}
+
 // Timing-safe password verification
 function verifyPassword(password: string, user: any): boolean {
   if (!user || !password) return false;
@@ -286,10 +321,11 @@ function verifyPassword(password: string, user: any): boolean {
     } catch {}
   }
 
-  // 2. Backward compatibility: verify legacy sha256 or initial password, and auto-upgrade
+  // 2. Backward compatibility: verify client hash, legacy sha256 or initial password, and auto-upgrade
   if (user.password) {
     const legacyHash = crypto.createHash('sha256').update(password + '_secure_salt_2026').digest('hex');
-    if (user.password === legacyHash || user.password === password) {
+    const clientHash = fnv1aClientHash(password);
+    if (user.password === legacyHash || user.password === clientHash || user.password === password) {
       return true;
     }
   }
@@ -689,10 +725,32 @@ app.post('/api/auth/login', (req, res) => {
       status: matchedUser.status
     };
 
+    // Auto-heal missing business reference if business was created elsewhere
+    let resolvedBusiness = business;
+    if (!resolvedBusiness && matchedUser.businessId && matchedUser.businessId !== 'platform') {
+      resolvedBusiness = {
+        id: matchedUser.businessId,
+        name: matchedUser.name ? `${matchedUser.name}'s Workspace` : 'Business Workspace',
+        ownerName: matchedUser.name || 'Business Owner',
+        email: matchedUser.email,
+        phone: '',
+        category: 'General Enterprise',
+        status: 'active',
+        subscriptionStatus: 'trial',
+        subscriptionAmount: 299,
+        currency: 'GHC',
+        createdAt: new Date().toISOString()
+      };
+      if (!Array.isArray(dbData['bos_businesses'])) dbData['bos_businesses'] = [];
+      dbData['bos_businesses'].push(resolvedBusiness);
+      writeDatabase(dbData);
+    }
+
     return res.json({
       success: true,
       token,
-      user: cleanUser
+      user: cleanUser,
+      business: resolvedBusiness || null
     });
   } catch (err: any) {
     console.error('Login error:', err);
@@ -844,7 +902,205 @@ app.get('/api/auth/me', (req: any, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
-  return res.json({ success: true, user: req.user });
+  const dbData = readDatabase();
+  const businesses = dbData['bos_businesses'] || [];
+  const business = businesses.find((b: any) => b && (b.id === req.user.businessId || b._id === req.user.businessId)) || null;
+  return res.json({ success: true, user: req.user, business });
+});
+
+// GET /api/business/:businessId: Authoritative retrieval of business workspace tenant
+app.get('/api/business/:businessId', (req: any, res: any) => {
+  try {
+    const { businessId } = req.params;
+    if (!businessId || businessId === 'platform') {
+      return res.status(400).json({ success: false, error: 'Invalid business identifier' });
+    }
+
+    const dbData = readDatabase();
+    const businesses: any[] = dbData['bos_businesses'] || dbData['businesses'] || [];
+    let business = businesses.find((b: any) => b && (b.id === businessId || b._id === businessId));
+
+    // If not found in businesses list, check if user exists for this business and auto-heal
+    if (!business) {
+      const users: any[] = dbData['bos_users'] || [];
+      const user = users.find((u: any) => u && (u.businessId === businessId || u.schoolId === businessId));
+      if (user) {
+        business = {
+          id: businessId,
+          name: user.name ? `${user.name}'s Workspace` : 'Business Workspace',
+          ownerName: user.name || 'Business Owner',
+          email: user.email || '',
+          phone: user.phone || '',
+          category: 'General Enterprise',
+          businessType: 'General Enterprise',
+          status: 'active',
+          subscriptionStatus: 'trial',
+          subscriptionAmount: 299,
+          currency: 'GHC',
+          createdAt: new Date().toISOString(),
+          registrationDate: new Date().toISOString(),
+          trialEndDate: new Date(Date.now() + 30 * 86400000).toISOString(),
+          enabledFeatures: ['sales', 'inventory', 'customers', 'suppliers', 'reports', 'restaurant']
+        };
+        if (!Array.isArray(dbData['bos_businesses'])) dbData['bos_businesses'] = [];
+        dbData['bos_businesses'].push(business);
+        writeDatabase(dbData);
+      }
+    }
+
+    if (!business) {
+      return res.status(404).json({ success: false, error: 'Business workspace not found' });
+    }
+
+    return res.json({ success: true, business });
+  } catch (err: any) {
+    console.error('Error fetching business by ID:', err);
+    return res.status(500).json({ success: false, error: 'Internal server error resolving business workspace' });
+  }
+});
+
+// GET /api/businesses: Authoritative list of active business workspaces
+app.get('/api/businesses', (req: any, res: any) => {
+  try {
+    const dbData = readDatabase();
+    const businesses = dbData['bos_businesses'] || dbData['businesses'] || [];
+    return res.json({ success: true, businesses });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Failed to read businesses' });
+  }
+});
+
+// POST /api/admin/register-business: Atomic and persistent registration of business and owner
+app.post('/api/admin/register-business', async (req: any, res: any) => {
+  try {
+    const {
+      businessName,
+      ownerName,
+      email,
+      phone,
+      category,
+      password,
+      currency,
+      subscriptionAmount,
+      trialDays,
+      subscriptionStatus,
+      isStockTransferEnabled
+    } = req.body || {};
+
+    if (!businessName || !ownerName || !email || !password) {
+      return res.status(400).json({ success: false, error: 'Business name, owner name, email, and password are required.' });
+    }
+
+    const trimmedEmail = String(email).trim().toLowerCase();
+    const trimmedBusName = String(businessName).trim();
+    const trimmedOwner = String(ownerName).trim();
+    const trimmedPhone = String(phone || '').trim();
+
+    const dbData = readDatabase();
+    const users: any[] = Array.isArray(dbData['bos_users']) ? dbData['bos_users'] : [];
+
+    // Check if email already registered by a non-superadmin
+    const existing = users.find((u: any) => u && u.email && u.email.toLowerCase() === trimmedEmail && u.role !== 'SUPER_ADMIN');
+    if (existing) {
+      return res.status(409).json({ success: false, error: `An account with email "${trimmedEmail}" already exists.` });
+    }
+
+    const busId = 'bus-' + Math.random().toString(36).substring(2, 9);
+    const userId = 'u-' + Math.random().toString(36).substring(2, 9);
+    const nowIso = new Date().toISOString();
+    const trialDaysNum = parseInt(trialDays, 10) || 30;
+    const trialEnd = new Date();
+    trialEnd.setDate(trialEnd.getDate() + trialDaysNum);
+
+    const { hash, salt } = hashPasswordPbkdf2(String(password));
+    const fnvHash = fnv1aClientHash(String(password));
+
+    const newBusiness = {
+      id: busId,
+      name: trimmedBusName,
+      ownerName: trimmedOwner,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      category: String(category || 'General Enterprise').trim(),
+      businessType: String(category || 'General Enterprise').trim(),
+      status: 'active',
+      createdAt: nowIso,
+      registrationDate: nowIso,
+      trialEndDate: trialEnd.toISOString(),
+      subscriptionStatus: subscriptionStatus || 'trial',
+      subscriptionAmount: Number(subscriptionAmount) || 299,
+      currency: currency || 'GHC',
+      isStockTransferEnabled: Boolean(isStockTransferEnabled),
+      enabledFeatures: ['sales', 'inventory', 'customers', 'suppliers', 'reports', 'restaurant'],
+      receiptConfig: {
+        businessName: trimmedBusName,
+        contactInfo: trimmedPhone ? `${trimmedBusName}\nTel: ${trimmedPhone}` : trimmedBusName,
+        footerMessage: 'Thank you for your patronage!',
+        layout: 'standard'
+      }
+    };
+
+    const newOwner = {
+      id: userId,
+      businessId: busId,
+      name: trimmedOwner,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      role: 'owner',
+      status: 'active',
+      passwordHash: hash,
+      salt: salt,
+      password: fnvHash,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    // Remove busId from deleted business list if present
+    if (Array.isArray(dbData['bos_deleted_business_ids'])) {
+      dbData['bos_deleted_business_ids'] = dbData['bos_deleted_business_ids'].filter((id: string) => id !== busId);
+    }
+
+    if (!Array.isArray(dbData['bos_businesses'])) dbData['bos_businesses'] = [];
+    dbData['bos_businesses'].unshift(newBusiness);
+    users.unshift(newOwner);
+    dbData['bos_users'] = users;
+    writeDatabase(dbData);
+
+    // Sync to Firestore if serverFsDb is available
+    if (serverFsDb) {
+      try {
+        fsSetDoc(fsDoc(serverFsDb, 'bos_businesses', busId), newBusiness, { merge: true }).catch(() => {});
+        fsSetDoc(fsDoc(serverFsDb, 'bos_users', userId), {
+          id: userId,
+          businessId: busId,
+          name: trimmedOwner,
+          email: trimmedEmail,
+          role: 'owner',
+          status: 'active',
+          createdAt: nowIso
+        }, { merge: true }).catch(() => {});
+      } catch (e) {}
+    }
+
+    const cleanUser: SanitizedUser = {
+      id: userId,
+      email: trimmedEmail,
+      name: trimmedOwner,
+      role: 'owner',
+      businessId: busId,
+      status: 'active'
+    };
+
+    return res.status(201).json({
+      success: true,
+      message: `Business workspace "${trimmedBusName}" registered successfully.`,
+      business: newBusiness,
+      user: cleanUser
+    });
+  } catch (err: any) {
+    console.error('Registration error in /api/admin/register-business:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to register business workspace.' });
+  }
 });
 
 // POST /api/auth/change-password: Secure password modification with verification

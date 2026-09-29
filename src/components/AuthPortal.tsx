@@ -38,7 +38,7 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 interface AuthPortalProps {
-  onLoginSuccess: (user: User) => void;
+  onLoginSuccess: (user: User, business?: Business | null) => void;
 }
 
 export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
@@ -233,10 +233,25 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
       }
 
       const authenticatedUser: User = data.user;
+      if (data.business) {
+        db.saveBusiness(data.business);
+      }
       db.setCurrentUser(authenticatedUser, data.token);
 
       // Trigger cloud pull to populate tenant workspace
       db.pullFromCloud();
+
+      // Proactively ensure tenant business is populated locally
+      if (authenticatedUser.businessId && authenticatedUser.businessId !== 'platform') {
+        const cached = db.getBusinesses().find(b => b.id === authenticatedUser.businessId);
+        if (!cached) {
+          if (data.business) {
+            db.saveBusiness(data.business);
+          } else {
+            await db.resolveBusiness(authenticatedUser.businessId);
+          }
+        }
+      }
 
       db.addActivityLog(authenticatedUser.businessId, {
         userId: authenticatedUser.id,
@@ -246,7 +261,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
       });
 
       setIsLoading(false);
-      onLoginSuccess(authenticatedUser);
+      onLoginSuccess(authenticatedUser, data.business || null);
     } catch (netErr) {
       console.warn('Backend login network note, attempting offline check:', netErr);
       // Offline fallback: check local user list only if offline
@@ -279,7 +294,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
 
       db.setCurrentUser(matchedUser);
       setIsLoading(false);
-      onLoginSuccess(matchedUser);
+      onLoginSuccess(matchedUser, business || null);
     }
   };
 
@@ -336,7 +351,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
       setIsLoading(false);
       setSuccess('Business workspace successfully provisioned! Logging you in...');
       setTimeout(() => {
-        onLoginSuccess(data.user);
+        onLoginSuccess(data.user, data.business || null);
       }, 500);
       return;
     } catch (netErr) {
@@ -423,7 +438,7 @@ export function AuthPortal({ onLoginSuccess }: AuthPortalProps) {
     // Automatically log in newly created user
     db.setCurrentUser(newOwner);
     setTimeout(() => {
-      onLoginSuccess(newOwner);
+      onLoginSuccess(newOwner, newBusiness);
     }, 800);
   };
 
